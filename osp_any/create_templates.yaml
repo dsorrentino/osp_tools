@@ -1,0 +1,335 @@
+- name: Copy over the templates needed for a deployment
+  hosts: undercloud
+#
+# This playbook is intented to quickly create a base set of
+# overcloud deployment templates.
+#
+# The variables are pretty straight-forward.
+#
+  vars:
+    - networks:
+      - { network: "InternalApi", cidr: "172.16.1.0/24", vlan: "112", pool: "[{'start': '172.16.1.11', 'end': '172.16.1.200'}]", static_vip: "True", vip: 172.16.1.10 }
+      - { network: "Storage", cidr: "172.16.3.0/24", vlan: "113", pool: "[{'start': '172.16.3.11', 'end': '172.16.3.200'}]", static_vip: "True", vip: 172.16.3.10 }
+      - { network: "StorageMgmt", cidr: "172.16.4.0/24", vlan: "114", pool: "[{'start': '172.16.4.11', 'end': '172.16.4.200'}]", static_vip: "True", vip: 172.16.4.10 }
+      - { network: "Tenant", cidr: "172.16.2.0/24", vlan: "115", pool: "[{'start': '172.16.2.10', 'end': '172.16.2.200'}]", static_vip: "False" }
+      - { network: "External", cidr: "10.9.65.128/26", vlan: "118", pool: "[{'start': '10.9.65.171', 'end': '10.9.65.179'}]", static_vip: "True", vip: 10.9.65.170, default_route: 10.9.65.129 }
+    - dns_servers: '["10.11.5.19","10.5.30.160"]'
+    - ntp_server: ntp.example.com
+    - ssl_config: { enable_tls: "True", cloud_name: "lowes-overcloud.hextupleo.lab", cloud_domain: "hextupleo.lab" }
+    - nodes:
+      - { count_parameter: "ControllerCount", flavor_parameter: "OvercloudControlFlavor", flavor: "control", count: 3, custom_role: "False" }
+      - { count_parameter: "ComputeCount", flavor_parameter: "OvercloudComputeFlavor", flavor: "compute", count: 0, custom_role: "False" }
+      - { count_parameter: "CephStorageCount", flavor_parameter: "OvercloudCephStorageFlavor", flavor: "ceph-storage", count: 0, custom_role: "False" }
+      - { count_parameter: "ComputeOsdCount", flavor_parameter: "OvercloudComputeOsdFlavor", flavor: "computeosd", count: 2, custom_role: "True", role_combine: "Compute,CephStorage" }
+    - nic_configs: bond-with-vlans
+    - overcloud_timezone: 'US/Eastern'
+    - tripleo_heat_templates: /usr/share/openstack-tripleo-heat-templates
+    - stack_templates: /home/stack/templates
+    - template_files:
+      - environments/network-environment.yaml
+      - environments/network-isolation.yaml
+      - environments/storage-environment.yaml
+      - roles_data.yaml
+    - storage_config:
+      - { storage: 'cinder', iscsi: true, ceph: false, backup: 'ceph' }
+      - { storage: 'nova-ephemeral', use_ceph: false }
+      - { storage: 'glance', backend: 'rbd' } # Backend may be swift, rbd (ceph) or file
+      - { storage: 'gnocchi', backend: 'rbd' } # Backend may be swift, rbd (ceph) or file
+  tasks:
+    - name: Create the necessary templates directories if needed
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: 0755
+      with_items:
+        - "{{ stack_templates }}"
+        - "{{ stack_templates }}/environments"
+        - "{{ stack_templates }}/network/config/{{ nic_configs }}"
+    - name: Create the node-info.yaml for the Overcloud Scale
+      copy:
+        content: |
+          parameter_defaults:
+        dest: "{{ stack_templates }}/node-info.yaml"
+    - name: Configure the flavors for the nodes in node-info.yaml
+      lineinfile:
+        path: "{{ stack_templates }}/node-info.yaml"
+        regexp: "{{ item.flavor_parameter }}"
+        line: "  {{ item.flavor_parameter }}: {{ item.flavor }}"
+      with_items: "{{ nodes }}"
+      when: item.count > 0
+    - name: Configure the count for the nodes in node-info.yaml
+      lineinfile:
+        path: "{{ stack_templates }}/node-info.yaml"
+        regexp: "{{ item.count_parameter }}"
+        line: "  {{ item.count_parameter }}: {{ item.count }}"
+      with_items: "{{ nodes }}"
+      when: item.count > 0
+    - name: Clean out any entries where the count is now zero
+      lineinfile:
+        path: "{{ stack_templates }}/node-info.yaml"
+        regexp: "({{ item.count_parameter }}|{{ item.flavor_parameter }})"
+        state: absent
+      with_items: "{{ nodes }}"
+      when: item.count == 0
+    - name: Copy in the necessary template files
+      copy:
+        src: "{{ tripleo_heat_templates }}/{{ item }}"
+        dest: "{{ stack_templates }}/{{ item }}"
+      with_items: "{{ template_files }}"
+    - name: Update relevant path names (environments)
+      replace:
+        path: "{{ stack_templates }}/{{ item }}"
+        regexp: '\.\.\/environments'
+        replace: "{{ tripleo_heat_templates }}/environments"
+      with_items: "{{ template_files }}"
+    - name: Update relevant path names (puppet)
+      replace:
+        path: "{{ stack_templates }}/{{ item }}"
+        regexp: '\.\.\/puppet/'
+        replace: "{{ tripleo_heat_templates }}/puppet/"
+      with_items: "{{ template_files }}"
+    - name: Update relevant path names (network)
+      replace:
+        path: "{{ stack_templates }}/{{ item }}"
+        regexp: '\.\.\/network/config'
+        replace: "{{ stack_templates }}/network/config"
+      with_items: "{{ template_files }}"
+    - name: Obtain the controlplane netmask from undercloud.conf
+      shell: "grep '^local_ip' /home/stack/undercloud.conf | awk -F/ '{print $NF}'"
+      register: control_plane_netmask
+    - name: Obtain the controlplane IP address from undercloud.conf
+      shell: "grep '^local_ip' /home/stack/undercloud.conf | awk '{print $NF}' | awk -F/ '{print $1}'"
+      register: control_plane_ip
+    - name: Obtain the controlplane gateway address from undercloud.conf
+      shell: "grep '^network_gateway' /home/stack/undercloud.conf | awk '{print $NF}'"
+      register: control_plane_gw
+    - name: Update ControlPlaneSubnetCidr in network-environment.yaml
+      replace:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        regexp: 'ControlPlaneSubnetCidr:.*$'
+        replace: "ControlPlaneSubnetCidr: '{{ control_plane_netmask.stdout }}'"
+    - name: Update EC2MetadataIp in network-environment.yaml
+      replace:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        regexp: 'EC2MetadataIp:.*$'
+        replace: "EC2MetadataIp: {{ control_plane_ip.stdout }}"
+    - name: Update ControlPlaneDefaultRoute in network-environment.yaml
+      replace:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        regexp: 'ControlPlaneDefaultRoute:.*$'
+        replace: "ControlPlaneDefaultRoute: {{ control_plane_gw.stdout }}"
+    - name: Update networking cidr's in network-environment.yaml
+      replace:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        regexp: "{{ item.network }}NetCidr:.*"
+        replace: "{{ item.network }}NetCidr: {{ item.cidr }}"
+      with_items: "{{ networks }}"
+    - name: Update networking VLANs in network-environment.yaml
+      replace:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        regexp: "{{ item.network }}NetworkVlanID:.*"
+        replace: "{{ item.network }}NetworkVlanID: {{ item.vlan }}"
+      with_items: "{{ networks }}"
+    - name: Update networking allocation pools in network-environment.yaml
+      replace:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        regexp: "{{ item.network }}AllocationPools:.*"
+        replace: "{{ item.network }}AllocationPools: {{ item.pool }}"
+      with_items: "{{ networks }}"
+    - name: Update networking external network default route in network-environment.yaml
+      replace:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        regexp: "{{ item.network }}InterfaceDefaultRoute.*"
+        replace: "{{ item.network }}InterfaceDefaultRoute: {{ item.default_route }}"
+      with_items: "{{ networks }}"
+      when: item.network  == "External"
+    - name: Update networking DNS servers in network-environment.yaml
+      replace:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        regexp: "DnsServers:.*"
+        replace: "DnsServers: {{ dns_servers }}"
+    - name: Update nic-configs location in network-environment.yaml
+      replace:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        regexp: "/single-nic-vlans/"
+        replace: "/{{ nic_configs }}/"
+    - name: Copy over the desired nic-configs
+      copy:
+        src: "{{ tripleo_heat_templates }}/network/config/{{ nic_configs }}"
+        dest: "{{ stack_templates }}/network/config/"
+    - name: Get list of all NIC config YAML files
+      find:
+        paths: "{{ stack_templates }}/network/config/{{ nic_configs }}"
+        patterns: '*.yaml'
+      register: nic_config_directory
+    - name: Update relative paths in NIC config
+      replace:
+        path: "{{ item.path }}"
+        regexp: "../../scripts"
+        replace: "{{ tripleo_heat_templates }}/network/scripts"
+      with_items: "{{ nic_config_directory.files }}"
+    - name: Check if we are using a custom storage-environment.yaml
+      stat:
+        path: "{{ stack_templates }}/environments/storage-environment.yaml"
+      register: custom_storage
+    - name: Update Cinder ISCSI backend
+      replace:
+        path: "{{ custom_storage.stat.path }}"
+        regexp: "CinderEnableIscsiBackend:.*$"
+        replace: "CinderEnableIscsiBackend: {{ item.iscsi }}"
+      when: custom_storage.stat.exists == True and item.storage == "cinder"
+      with_items: "{{ storage_config }}"
+    - name: Update Cinder Ceph backend
+      replace:
+        path: "{{ custom_storage.stat.path }}"
+        regexp: "CinderEnableRbdBackend:.*$"
+        replace: "CinderEnableRbdBackend: {{ item.ceph }}"
+      when: custom_storage.stat.exists == True and item.storage == "cinder"
+      with_items: "{{ storage_config }}"
+    - name: Update Cinder Backup backend
+      replace:
+        path: "{{ custom_storage.stat.path }}"
+        regexp: "CinderBackupBackend:.*$"
+        replace: "CinderBackupBackend: {{ item.backup }}"
+      when: custom_storage.stat.exists == True and item.storage == "cinder"
+      with_items: "{{ storage_config }}"
+    - name: Update Nova ephemeral backend
+      replace:
+        path: "{{ custom_storage.stat.path }}"
+        regexp: "NovaEnableRbdBackend:.*$"
+        replace: "NovaEnableRbdBackend: {{ item.use_ceph }}"
+      when: custom_storage.stat.exists == True and item.storage == "nova-ephemeral"
+      with_items: "{{ storage_config }}"
+    - name: Update Glance backend
+      replace:
+        path: "{{ custom_storage.stat.path }}"
+        regexp: "GlanceBackend:.*$"
+        replace: "GlanceBackend: {{ item.backend }}"
+      when: custom_storage.stat.exists == True and item.storage == "glance"
+      with_items: "{{ storage_config }}"
+    - name: Update Gnocchi backend
+      replace:
+        path: "{{ custom_storage.stat.path }}"
+        regexp: "GnocchiBackend:.*$"
+        replace: "GnocchiBackend: {{ item.backend }}"
+      when: custom_storage.stat.exists == True and item.storage == "gnocchi"
+      with_items: "{{ storage_config }}"
+    - name: Check if we are using a custom network-isolation.yaml
+      stat:
+        path: "{{ stack_templates }}/environments/network-isolation.yaml"
+      register: custom_isolation
+    - name: Update relative paths for network-isolation if it is being over-ridden
+      replace:
+        path: "{{ stack_templates }}/environments/network-isolation.yaml"
+        regexp: '\.\.\/network'
+        replace: "{{ tripleo_heat_templates }}/network"
+      when: custom_isolation.stat.exists == True
+    - name: Check if we are using a custom roles_data.yaml
+      stat:
+        path: "{{ stack_templates }}/roles_data.yaml"
+      register: custom_roles
+    - name: Set default count for all roles to 0 (if needed)
+      replace:
+        path: "{{ stack_templates }}/roles_data.yaml"
+        regexp: 'CountDefault: 1'
+        replace: "CountDefault: 0"
+      when: custom_roles.stat.exists 
+    - name: Create flavors for custom roles (if needed)
+      shell: |
+             source ~/stackrc >/dev/null 2>&1
+             if [[ -z "$(openstack flavor list -c Name -f value | grep {{ item.flavor }})" ]]
+             then
+               openstack flavor create --ram 4096 --disk 40 --vcpus 1 --public {{ item.flavor }}
+               openstack flavor set --property "cpu_arch"="x86_64" --property "capabilities:boot_option"="local" --property "capabilities:profile"="computeosd" computeosd
+             fi
+      with_items: "{{ nodes }}"
+      when: custom_roles.stat.exists and item.custom_role == "True"
+    - name: Update roles_data (if needed)
+      shell: |
+        WORK_FILE=$(mktemp)
+        ROLE_NAME=$(echo "{{ item.count_parameter }}" | sed 's/Count$//g')
+        ROLES=$(echo {{ item.role_combine }} | sed 's/,/ /g')
+        for ROLE in ${ROLES}
+        do
+          sed -n "/- name: ${ROLE}/,/^ *$/p" {{ stack_templates }}/roles_data.yaml > ${WORK_FILE}.${ROLE}
+        done
+        echo "" >> {{ stack_templates }}/roles_data.yaml
+        echo "- name: ${ROLE_NAME}" >>{{ stack_templates }}/roles_data.yaml
+        echo "  CountDefault: 0" >>{{ stack_templates }}/roles_data.yaml
+        echo "  ServicesDefault:" >>{{ stack_templates }}/roles_data.yaml
+        cat ${WORK_FILE}.* | grep 'OS::' | sort -u >>{{ stack_templates }}/roles_data.yaml
+        echo "" >> {{ stack_templates }}/roles_data.yaml
+        rm -f ${WORK_FILE}*
+      with_items: "{{ nodes }}"
+      when: custom_roles.stat.exists and item.custom_role == "True"
+    - name: Update network-isolation ports (if needed)
+      shell: |
+        WORK_FILE=$(mktemp)
+        ROLE_NAME=$(echo "{{ item.count_parameter }}" | sed 's/Count$//g')
+        ROLES=$(echo {{ item.role_combine }} | sed 's/,/ /g')
+        for ROLE in ${ROLES}
+        do
+          grep "${ROLE}::Ports" {{ stack_templates }}/environments/network-isolation.yaml | grep -v "^ *#">> ${WORK_FILE}
+        done
+        echo "" >>{{ stack_templates }}/environments/network-isolation.yaml
+        echo "  # Port assignments for the ${ROLE_NAME} role" >>{{ stack_templates }}/environments/network-isolation.yaml
+        for PORT_TYPE in $(cat ${WORK_FILE} | awk '{print $1}' | awk -F: '{print $9}' | sort -u)
+        do
+          PORT_FILE=""
+          PORT_FILE=$(grep ${PORT_TYPE} ${WORK_FILE} | grep -v noop.yaml | head -1 | awk '{print $NF}' )
+          if [[ -z "${PORT_FILE}" ]]
+          then
+            PORT_FILE=$(grep ${PORT_TYPE} ${WORK_FILE} | grep noop.yaml | head -1 | awk '{print $NF}' )
+          fi
+          echo "  OS::TripleO::${ROLE_NAME}::Ports::${PORT_TYPE}: ${PORT_FILE}" >>{{ stack_templates }}/environments/network-isolation.yaml
+        done
+      with_items: "{{ nodes }}"
+      when: custom_isolation.stat.exists and custom_roles.stat.exists and item.custom_role == "True"
+    - name: Copy YAML files for TLS configuration if using TLS
+      copy:
+        src: "{{ tripleo_heat_templates }}/{{ item }}"
+        dest: "{{ stack_templates }}/{{ item }}"
+      with_items: 
+        - environments/enable-tls.yaml
+        - environments/inject-trust-anchor.yaml
+      when: ssl_config.enable_tls == "True"
+    - name: Update relevant path names for TLS files
+      replace:
+        path: "{{ stack_templates }}/{{ item }}"
+        regexp: '\.\.\/puppet/'
+        replace: "{{ tripleo_heat_templates }}/puppet/"
+      with_items: 
+        - environments/enable-tls.yaml
+        - environments/inject-trust-anchor.yaml
+      when: ssl_config.enable_tls == "True"
+    - name: Add cloud info to network-environment.yaml if using TLS
+      lineinfile:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        regexp: "  {{ item.setting }}:.*$"
+        line: "  {{ item.setting }}: {{ item.value }}"
+      with_items:
+        - { setting: "CloudName", value: "{{ ssl_config.cloud_name }}" }
+        - { setting: "CloudDomain", value: "{{ ssl_config.cloud_domain }}" }
+      when: ssl_config.enable_tls == "True"
+    - name: Add TimeZone info to network-environment.yaml
+      lineinfile:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        regexp: "  TimeZone:.*$"
+        line: "  TimeZone: '{{ overcloud_timezone }}'"
+    - name: Configure NTP Server
+      lineinfile:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        regexp: "  NtpServer:.*$"
+        line: "  NtpServer: {{ ntp_server }}"
+    - name: Configure any static VIPs
+      lineinfile:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        regexp: "  {{ item.network }}VirtualFixedIPs:.*$"
+        line: "  {{ item.network }}VirtualFixedIPs: [{'ip_address':'{{ item.vip }}'}]"
+      with_items: "{{ networks }}"
+      when: item.static_vip == "True"
+    - name: Change the External VIP name from External to Public because it'd the only weird one
+      replace:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        regexp: "ExternalVirtualFixedIPs"
+        replace: "PublicVirtualFixedIPs"

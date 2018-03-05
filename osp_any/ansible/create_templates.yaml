@@ -1,5 +1,5 @@
 - name: Copy over the templates needed for a deployment
-  hosts: undercloud
+  hosts: localhost
 #
 # This playbook is intented to quickly create a base set of
 # overcloud deployment templates.
@@ -7,6 +7,7 @@
 # The variables are pretty straight-forward.
 #
   vars:
+    - osp_version: 12
     - networks:
       - { network: "InternalApi", cidr: "172.16.1.0/24", vlan: "112", pool: "[{'start': '172.16.1.11', 'end': '172.16.1.200'}]", static_vip: "True", vip: 172.16.1.10 }
       - { network: "Storage", cidr: "172.16.3.0/24", vlan: "113", pool: "[{'start': '172.16.3.11', 'end': '172.16.3.200'}]", static_vip: "True", vip: 172.16.3.10 }
@@ -25,17 +26,22 @@
     - overcloud_timezone: 'US/Eastern'
     - tripleo_heat_templates: /usr/share/openstack-tripleo-heat-templates
     - stack_templates: /home/stack/templates
-    - template_files:
-      - environments/network-environment.yaml
-      - environments/network-isolation.yaml
-      - environments/storage-environment.yaml
-      - roles_data.yaml
+    - base_templates: "network-environment.yaml,network-isolation.yaml,storage-environment.yaml,roles_data.yaml"
+    - template_files: []
     - storage_config:
       - { storage: 'cinder', iscsi: true, ceph: false, backup: 'ceph' }
       - { storage: 'nova-ephemeral', use_ceph: false }
       - { storage: 'glance', backend: 'rbd' } # Backend may be swift, rbd (ceph) or file
       - { storage: 'gnocchi', backend: 'rbd' } # Backend may be swift, rbd (ceph) or file
+    - enable_fernet: False
   tasks:
+    - name: Check if undercloud is deployed
+      shell: |
+        [ -z "$( ip a s br-ex 2>/dev/null)" ] && echo False || echo True
+      register: undercloud_deployed
+    - name: Set undercloud_deployed fact
+      set_fact:
+        undercloud_deployed: "{{ undercloud_deployed.stdout }}"
     - name: Create the necessary templates directories if needed
       file:
         path: "{{ item }}"
@@ -71,28 +77,52 @@
         state: absent
       with_items: "{{ nodes }}"
       when: item.count == 0
+    - name: Get list of default template files to copy
+      find:
+        path: "{{ tripleo_heat_templates }}"
+        patterns: "{{ base_templates }}"
+        recurse: yes
+      register: find_results
     - name: Copy in the necessary template files
-      copy:
-        src: "{{ tripleo_heat_templates }}/{{ item }}"
-        dest: "{{ stack_templates }}/{{ item }}"
-      with_items: "{{ template_files }}"
+      shell: | 
+        #!/bin/bash
+        DESTINATION_FILE=$(echo "{{ item.path }}" | sed 's|/usr/share/openstack-tripleo-heat-templates|/home/stack/templates|g')
+        mkdir -p $(echo ${DESTINATION_FILE} | xargs dirname)
+        cp {{ item.path }} ${DESTINATION_FILE}
+      with_items: "{{ find_results.files }}"
+    - name: Get list of copied template files
+      find:
+        path: "{{ stack_templates }}"
+        patterns: "*.yaml"
+        recurse: yes
+      register: find_results
+    - name: Build stack template list
+      set_fact:
+        template_files: "{{ template_files }} + [ '{{ item.path }}' ]"
+      with_items: "{{ find_results.files }}"
     - name: Update relevant path names (environments)
       replace:
-        path: "{{ stack_templates }}/{{ item }}"
+        path: "{{ item }}"
         regexp: '\.\.\/environments'
         replace: "{{ tripleo_heat_templates }}/environments"
       with_items: "{{ template_files }}"
     - name: Update relevant path names (puppet)
       replace:
-        path: "{{ stack_templates }}/{{ item }}"
+        path: "{{ item }}"
         regexp: '\.\.\/puppet/'
         replace: "{{ tripleo_heat_templates }}/puppet/"
       with_items: "{{ template_files }}"
     - name: Update relevant path names (network)
       replace:
-        path: "{{ stack_templates }}/{{ item }}"
+        path: "{{ item }}"
         regexp: '\.\.\/network/config'
         replace: "{{ stack_templates }}/network/config"
+      with_items: "{{ template_files }}"
+    - name: Update relevant path names (docker)
+      replace:
+        path: "{{ item }}"
+        regexp: '\.\.\/docker/'
+        replace: "{{ tripleo_heat_templates }}/docker/"
       with_items: "{{ template_files }}"
     - name: Obtain the controlplane netmask from undercloud.conf
       shell: "grep '^local_ip' /home/stack/undercloud.conf | awk -F/ '{print $NF}'"
@@ -243,7 +273,7 @@
                openstack flavor set --property "cpu_arch"="x86_64" --property "capabilities:boot_option"="local" --property "capabilities:profile"="computeosd" computeosd
              fi
       with_items: "{{ nodes }}"
-      when: custom_roles.stat.exists and item.custom_role == "True"
+      when: undercloud_deployed and custom_roles.stat.exists and item.custom_role == "True"
     - name: Update roles_data (if needed)
       shell: |
         WORK_FILE=$(mktemp)
@@ -263,6 +293,29 @@
       with_items: "{{ nodes }}"
       when: custom_roles.stat.exists and item.custom_role == "True"
     - name: Update network-isolation ports (if needed)
+      shell: |
+        WORK_FILE=$(mktemp)
+        ROLE_NAME=$(echo "{{ item.count_parameter }}" | sed 's/Count$//g')
+        ROLES=$(echo {{ item.role_combine }} | sed 's/,/ /g')
+        for ROLE in ${ROLES}
+        do
+          grep "${ROLE}::Ports" {{ stack_templates }}/environments/network-isolation.yaml | grep -v "^ *#">> ${WORK_FILE}
+        done
+        echo "" >>{{ stack_templates }}/environments/network-isolation.yaml
+        echo "  # Port assignments for the ${ROLE_NAME} role" >>{{ stack_templates }}/environments/network-isolation.yaml
+        for PORT_TYPE in $(cat ${WORK_FILE} | awk '{print $1}' | awk -F: '{print $9}' | sort -u)
+        do
+          PORT_FILE=""
+          PORT_FILE=$(grep ${PORT_TYPE} ${WORK_FILE} | grep -v noop.yaml | head -1 | awk '{print $NF}' )
+          if [[ -z "${PORT_FILE}" ]]
+          then
+            PORT_FILE=$(grep ${PORT_TYPE} ${WORK_FILE} | grep noop.yaml | head -1 | awk '{print $NF}' )
+          fi
+          echo "  OS::TripleO::${ROLE_NAME}::Ports::${PORT_TYPE}: ${PORT_FILE}" >>{{ stack_templates }}/environments/network-isolation.yaml
+        done
+      with_items: "{{ nodes }}"
+      when: custom_isolation.stat.exists and custom_roles.stat.exists and item.custom_role == "True"
+    - name: Update network-environment ports (if needed)
       shell: |
         WORK_FILE=$(mktemp)
         ROLE_NAME=$(echo "{{ item.count_parameter }}" | sed 's/Count$//g')

@@ -478,7 +478,7 @@
       copy:
         content: |
           #!/bin/bash
-          cd {{ uc_user }}
+          cd ~{{ uc_user }}
           source ~/stackrc
           time openstack overcloud deploy --templates \
             -e {{ stack_templates }}/node-info.yaml \

@@ -27,6 +27,7 @@
       - { storage: 'glance', backend: 'swift' } # Backend may be swift, rbd (ceph) or file
       - { storage: 'gnocchi', backend: 'swift' } # Backend may be swift, rbd (ceph) or file
     - enable_fernet: True
+    - deploy_ironic: True
   tasks:
     - name: Check if undercloud is deployed
       shell: |
@@ -93,6 +94,22 @@
         group: "{{ uc_user }}"
       with_items: "{{ nodes }}"
       when: undercloud_deployed and item.custom_role == "True" and item.count != 0
+    - name: Create the services sub-directory under environments if needed.
+      file:
+        state: directory
+        owner: "{{ uc_user }}"
+        group: "{{ uc_user }}"
+        path: "{{ stack_templates }}/environments/services/"
+      when: deploy_ironic
+    - name: Copy ironic.yaml if deploying ironic in the overcloud
+      copy:
+        remote_src: true
+        src: "{{ tripleo_heat_templates }}/environments/services/ironic.yaml"
+        dest: "{{ stack_templates }}/environments/services/"
+        force: true
+        owner: "{{ uc_user }}"
+        group: "{{ uc_user }}"
+      when: deploy_ironic
     - name: Get list of copied template files
       find:
         path: "{{ stack_templates }}"
@@ -124,7 +141,7 @@
     - name: Update relevant path names (docker)
       replace:
         path: "{{ item }}"
-        regexp: '\.\.\/docker/'
+        regexp: '(\.\./\.\./docker/|\.\./docker/)'
         replace: "{{ tripleo_heat_templates }}/docker/"
       with_items: "{{ template_files }}"
     - name: Obtain the controlplane netmask from undercloud.conf
@@ -420,6 +437,39 @@
           cp /home/{{ uc_user }}/fernet/${YAML} {{ stack_templates }}/environments/
         done
       when: enable_fernet
+    - name: Add bridge mappings for Ironic 
+      lineinfile:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        insertafter: NeutronNetworkVLANRanges
+        line: '  NeutronBridgeMappings: datacentre:br-ex,baremetal:br-baremetal'
+      when: deploy_ironic
+    - name: Add flat network for Ironic 
+      lineinfile:
+        path: "{{ stack_templates }}/environments/network-environment.yaml"
+        insertafter: NeutronBridgeMappings
+        line: '  NeutronFlatNetworks: datacentre,baremetal'
+      when: deploy_ironic
+    - name: Generate ironic-config.yaml
+      copy:
+        content: |
+          parameter_defaults:
+          
+              NovaSchedulerDefaultFilters:
+                  - RetryFilter
+                  - AggregateInstanceExtraSpecsFilter
+                  - AvailabilityZoneFilter
+                  - RamFilter
+                  - DiskFilter
+                  - ComputeFilter
+                  - ComputeCapabilitiesFilter
+                  - ImagePropertiesFilter
+          
+              IronicCleaningDiskErase: metadata
+        dest: "{{ stack_templates }}/environments/ironic-config.yaml"
+        owner: stack
+        group: stack
+        mode: u+rw,g+r,o+r
+      when: deploy_ironic
     - name: Generate overcloud-deploy.sh
       copy:
         content: |
@@ -450,3 +500,12 @@
         insertafter: openstack overcloud deploy
         line: '  -r {{ stack_templates }}/roles_data.yaml \'
       when: custom_roles.stat.exists 
+    - name: Add Ironic YAML's to overcloud-deploy.sh (if needed)
+      blockinfile:
+        path: /home/{{ uc_user }}/overcloud-deploy.sh
+        block: |2
+            -e {{ stack_templates }}/environments/services/ironic.yaml \
+            -e {{ stack_templates }}/environments/ironic-config.yaml \
+        marker: "  # {mark} ANSIBLE IRONIC BLOCK"
+        insertbefore: log-file overcloud_deployment.log
+      when: deploy_ironic

@@ -1,0 +1,302 @@
+##############################
+# The expectation before running this is:
+#
+# - Your node is registered with a repository
+# - Your node is patched and up to date
+# - Your node has at least 2 properly configured NIC's and the
+#   default gateway is NOT the provisioning NIC
+#
+# Boolean Defaults:
+#    - generate_certificates: False
+#    - enable_masquerading: False
+#    - enable_uefi: True
+#    - enable_debug: True
+#    - enable_tempest: True
+#    - enable_mistral: True
+#    - enable_zaqar: True
+#    - enable_telemetry: True
+#    - enable_ui: True
+#    - enable_validations: True
+#    - store_ceilometer_events: False
+#
+##############################
+
+- name: Configure and deploy the undercloud
+  hosts: darin-undercloud
+  vars_files:
+    - vars/environment.yaml
+    - vars/static.yaml
+  vars:
+    - rhel_version: 7
+    - generate_certificates: false
+    - enable_masquerading: true
+    - enable_uefi: false
+    - enable_debug: false
+    - enable_tempest: true
+    - enable_mistral: true
+    - enable_zaqar: true
+    - enable_telemetry: true
+    - enable_ui: true
+    - enable_validations: true
+    - store_ceilometer_events: true
+  tasks:
+    - name: Create user {{ uc_user }}
+      user:
+        name: "{{ uc_user }}"
+        password: "{{ uc_pass|password_hash('sha512') }}"
+    - name: Grant sudo to {{ uc_user }}
+      shell: echo "{{ uc_user }} ALL=(root) NOPASSWD:ALL" | tee /etc/sudoers.d/{{ uc_user }} && chmod 0440 /etc/sudoers.d/{{ uc_user }}
+    - name: Configure repositories for Triple-O
+      shell: |
+             subscription-manager repos --disable=*
+             subscription-manager repos --enable=rhel-{{ rhel_version }}-server-rpms --enable=rhel-{{ rhel_version }}-server-extras-rpms --enable=rhel-{{ rhel_version }}-server-rh-common-rpms --enable=rhel-ha-for-rhel-{{ rhel_version }}-server-rpms --enable=rhel-{{ rhel_version }}-server-openstack-{{ osp_version }}-rpms
+    - name: Install Triple-O Packages as well as director images
+      yum:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - python-tripleoclient
+        - rhosp-director-images
+        - rhosp-director-images-ipa
+    - name: Create images and templates directory for user {{ uc_user }}
+      file:
+        path: ~/{{ item }}
+        state: directory
+        mode: 0755
+      with_items:
+        - images
+        - templates
+        - ansible
+        - ansible/vars
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Copy the basic Ansible files to the stack user
+      copy:
+        src: /root/ansible/{{ item }}
+        dest: /home/{{ uc_user }}/ansible/{{ item }}
+        owner: "{{ uc_user }}"
+        group: "{{ uc_user }}"
+        mode: u=rw,g=r,o=r
+      with_items:
+        - ansible.cfg
+        - hosts
+        - vars/environment.yaml
+        - create_templates.yaml
+        - post_deploy_undercloud.yaml
+    - name: Copy the undercloud.conf into the {{ uc_user }} home directory
+      copy:
+        remote_src: true
+        src: /usr/share/instack-undercloud/undercloud.conf.sample
+        dest: ~/undercloud.conf
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - undercloud_hostname
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#undercloud_hostname = "
+        line: "undercloud_hostname = {{ ansible_fqdn }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Determine provisioning network prefix
+      shell: echo "{{ director_provisioning_network }}" | awk -F/ '{print $NF}'
+      register: director_provisioning_network_prefix
+    - name: Configure undercloud.conf - director_local_ip
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#local_ip "
+        line: "local_ip = {{ director_local_ip }}/{{ director_provisioning_network_prefix.stdout }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - network_gateway 
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#network_gateway "
+        line: "network_gateway = {{ director_local_ip }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: enable_masquerading
+    - name: Configure undercloud.conf - network_gateway 
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#network_gateway "
+        line: "network_gateway = {{ director_provisioning_gateway }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: enable_masquerading == False
+    - name: Configure undercloud.conf - director_public_vip
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#undercloud_public_host "
+        line: "undercloud_public_host = {{ director_public_vip }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - director_admin_vip
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#undercloud_admin_host "
+        line: "undercloud_admin_host = {{ director_admin_vip }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - generate_service_certificate 
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#generate_service_certificate "
+        line: "generate_service_certificate = true"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: generate_certificates
+    - name: Configure undercloud.conf - enable certificate_generation_ca
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#certificate_generation_ca "
+        line: "certificate_generation_ca = local"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: generate_certificates
+    - name: Configure undercloud.conf - local_interface
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#local_interface "
+        line: "local_interface = {{ director_provisioning_nic }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - director_provisioning_mtu
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#local_mtu "
+        line: "local_mtu = {{ director_provisioning_mtu }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - network_cidr
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#network_cidr "
+        line: "network_cidr = {{ director_provisioning_network }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - masquerade_network
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#masquerade_network "
+        line: "masquerade_network = {{ director_provisioning_network }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: enable_masquerading
+    - name: Configure undercloud.conf - director_provisioning_dhcp_start
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#dhcp_start "
+        line: "dhcp_start = {{ director_provisioning_dhcp_start }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - director_provisioning_dhcp_end
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#dhcp_end "
+        line: "dhcp_end = {{ director_provisioning_dhcp_end }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - inspection_iprange
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#inspection_iprange "
+        line: "inspection_iprange = {{ director_provisioning_introspection_start }},{{ director_provisioning_introspection_end }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - inspection_enable_uefi
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#inspection_enable_uefi "
+        line: "inspection_enable_uefi = true"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: enable_uefi
+    - name: Configure undercloud.conf - undercloud_debug 
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#undercloud_debug "
+        line: "undercloud_debug = {{ enable_debug }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - enable_tempest 
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#enable_tempest "
+        line: "enable_tempest = {{ enable_tempest }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - enable_mistral
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#enable_mistral "
+        line: "enable_mistral = {{ enable_mistral }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: osp_version < 11
+    - name: Configure undercloud.conf - enable_zaqar
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#enable_zaqar "
+        line: "enable_zaqar = {{ enable_zaqar }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: osp_version < 11
+    - name: Configure undercloud.conf - enable_telemetry
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#enable_telemetry "
+        line: "enable_telemetry = {{ enable_telemetry }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - enable_ui
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#enable_ui "
+        line: "enable_ui = {{ enable_ui }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - enable_validations 
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#enable_validations "
+        line: "enable_validations = {{ enable_validations }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - store_events
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#store_events "
+        line: "store_events = {{ store_ceilometer_events }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: osp_version < 11
+    - name: Extract overcloud images for later.
+      shell: |
+             cd ~/images
+             for i in $(ls /usr/share/rhosp-director-images/overcloud-full-latest-{{ osp_version }}*.tar /usr/share/rhosp-director-images/ironic-python-agent-latest-{{ osp_version }}*.tar); do tar -xvf $i; done
+      become: yes
+      become_user: "{{ uc_user }}"

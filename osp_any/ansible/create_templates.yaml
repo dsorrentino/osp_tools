@@ -1,43 +1,36 @@
 - name: Copy over the templates needed for a deployment
-  hosts: localhost
+  hosts: darin-undercloud
 #
 # This playbook is intented to quickly create a base set of
 # overcloud deployment templates.
 #
 # The variables are pretty straight-forward.
 #
+  vars_files:
+    - vars/environment.yaml
+    - vars/static.yaml
   vars:
-    - osp_version: 12
-    - networks:
-      - { network: "InternalApi", cidr: "172.16.1.0/24", vlan: "112", pool: "[{'start': '172.16.1.11', 'end': '172.16.1.200'}]", static_vip: "True", vip: 172.16.1.10 }
-      - { network: "Storage", cidr: "172.16.3.0/24", vlan: "113", pool: "[{'start': '172.16.3.11', 'end': '172.16.3.200'}]", static_vip: "True", vip: 172.16.3.10 }
-      - { network: "StorageMgmt", cidr: "172.16.4.0/24", vlan: "114", pool: "[{'start': '172.16.4.11', 'end': '172.16.4.200'}]", static_vip: "True", vip: 172.16.4.10 }
-      - { network: "Tenant", cidr: "172.16.2.0/24", vlan: "115", pool: "[{'start': '172.16.2.10', 'end': '172.16.2.200'}]", static_vip: "False" }
-      - { network: "External", cidr: "10.9.65.128/26", vlan: "118", pool: "[{'start': '10.9.65.171', 'end': '10.9.65.179'}]", static_vip: "True", vip: 10.9.65.170, default_route: 10.9.65.129 }
-    - dns_servers: '["10.11.5.19","10.5.30.160"]'
-    - ntp_server: ntp.example.com
-    - ssl_config: { enable_tls: "True", cloud_name: "lowes-overcloud.hextupleo.lab", cloud_domain: "hextupleo.lab" }
     - nodes:
-      - { count_parameter: "ControllerCount", flavor_parameter: "OvercloudControlFlavor", flavor: "control", count: 3, custom_role: "False" }
-      - { count_parameter: "ComputeCount", flavor_parameter: "OvercloudComputeFlavor", flavor: "compute", count: 0, custom_role: "False" }
+      - { count_parameter: "ControllerCount", flavor_parameter: "OvercloudControlFlavor", flavor: "control", count: 1, custom_role: "False" }
+      - { count_parameter: "ComputeCount", flavor_parameter: "OvercloudComputeFlavor", flavor: "compute", count: 1, custom_role: "False" }
       - { count_parameter: "CephStorageCount", flavor_parameter: "OvercloudCephStorageFlavor", flavor: "ceph-storage", count: 0, custom_role: "False" }
-      - { count_parameter: "ComputeOsdCount", flavor_parameter: "OvercloudComputeOsdFlavor", flavor: "computeosd", count: 2, custom_role: "True", role_combine: "Compute,CephStorage" }
+      - { count_parameter: "ComputeOsdCount", flavor_parameter: "OvercloudComputeOsdFlavor", flavor: "computeosd", count: 0, custom_role: "True", role_combine: "Compute,CephStorage" }
     - nic_configs: bond-with-vlans
     - overcloud_timezone: 'US/Eastern'
     - tripleo_heat_templates: /usr/share/openstack-tripleo-heat-templates
     - stack_templates: /home/stack/templates
-    - base_templates: "network-environment.yaml,network-isolation.yaml,storage-environment.yaml,roles_data.yaml"
+    - base_templates: "network-environment.yaml,network-isolation.yaml,storage-environment.yaml"
     - template_files: []
     - storage_config:
-      - { storage: 'cinder', iscsi: true, ceph: false, backup: 'ceph' }
+      - { storage: 'cinder', iscsi: true, ceph: false, backup: 'swift' } # Backup can be either 'ceph' or 'swift'
       - { storage: 'nova-ephemeral', use_ceph: false }
-      - { storage: 'glance', backend: 'rbd' } # Backend may be swift, rbd (ceph) or file
-      - { storage: 'gnocchi', backend: 'rbd' } # Backend may be swift, rbd (ceph) or file
-    - enable_fernet: False
+      - { storage: 'glance', backend: 'swift' } # Backend may be swift, rbd (ceph) or file
+      - { storage: 'gnocchi', backend: 'swift' } # Backend may be swift, rbd (ceph) or file
+    - enable_fernet: True
   tasks:
     - name: Check if undercloud is deployed
       shell: |
-        [ -z "$( ip a s br-ex 2>/dev/null)" ] && echo False || echo True
+        [ -z "$( ip a s br-ctlplane 2>/dev/null)" ] && echo False || echo True
       register: undercloud_deployed
     - name: Set undercloud_deployed fact
       set_fact:
@@ -86,10 +79,20 @@
     - name: Copy in the necessary template files
       shell: | 
         #!/bin/bash
-        DESTINATION_FILE=$(echo "{{ item.path }}" | sed 's|/usr/share/openstack-tripleo-heat-templates|/home/stack/templates|g')
+        DESTINATION_FILE=$(echo "{{ item.path }}" | sed 's|{{ tripleo_heat_templates }}|{{ stack_templates }}|g')
         mkdir -p $(echo ${DESTINATION_FILE} | xargs dirname)
         cp {{ item.path }} ${DESTINATION_FILE}
       with_items: "{{ find_results.files }}"
+    - name: Copy roles_data.yaml if doing custom roles
+      copy:
+        remote_src: true
+        src: "{{ tripleo_heat_templates }}/roles_data.yaml"
+        dest: "{{ stack_templates }}"
+        force: true
+        owner: "{{ uc_user }}"
+        group: "{{ uc_user }}"
+      with_items: "{{ nodes }}"
+      when: undercloud_deployed and item.custom_role == "True" and item.count != 0
     - name: Get list of copied template files
       find:
         path: "{{ stack_templates }}"
@@ -125,13 +128,13 @@
         replace: "{{ tripleo_heat_templates }}/docker/"
       with_items: "{{ template_files }}"
     - name: Obtain the controlplane netmask from undercloud.conf
-      shell: "grep '^local_ip' /home/stack/undercloud.conf | awk -F/ '{print $NF}'"
+      shell: "grep '^local_ip' /home/{{ uc_user }}/undercloud.conf | awk -F/ '{print $NF}'"
       register: control_plane_netmask
     - name: Obtain the controlplane IP address from undercloud.conf
-      shell: "grep '^local_ip' /home/stack/undercloud.conf | awk '{print $NF}' | awk -F/ '{print $1}'"
+      shell: "grep '^local_ip' /home/{{ uc_user }}/undercloud.conf | awk '{print $NF}' | awk -F/ '{print $1}'"
       register: control_plane_ip
     - name: Obtain the controlplane gateway address from undercloud.conf
-      shell: "grep '^network_gateway' /home/stack/undercloud.conf | awk '{print $NF}'"
+      shell: "grep '^network_gateway' /home/{{ uc_user }}/undercloud.conf | awk '{print $NF}'"
       register: control_plane_gw
     - name: Update ControlPlaneSubnetCidr in network-environment.yaml
       replace:
@@ -386,3 +389,64 @@
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         regexp: "ExternalVirtualFixedIPs"
         replace: "PublicVirtualFixedIPs"
+    - name: Enable Fernet Tokens in the Overcloud
+      shell: |
+        #!/bin/bash
+
+        mkdir -p /home/{{ uc_user }}/fernet
+        
+        source /home/{{ uc_user }}/stackrc
+        printf "Generating the fernet keys and tarring them up in /home/{{ uc_user }}/fernet.\n"
+        sudo keystone-manage fernet_setup --keystone-user keystone --keystone-group keystone
+        sudo tar -zcf /home/{{ uc_user }}/fernet/keystone-fernet-keys.tar.gz /etc/keystone/fernet-keys
+        printf "DONE\n"
+        
+        printf "Remove existing swift overcloud-artifacts container (if it exists).\n"
+        swift delete overcloud-artifacts
+        printf "DONE\n"
+        
+        printf "Uploading the fernet keys to swift.\n"
+        upload-swift-artifacts -f /home/{{ uc_user }}/fernet/keystone-fernet-keys.tar.gz --environment /home/{{ uc_user }}/fernet/deployment-artifacts.yaml
+        printf "DONE\n"
+        
+        printf "creating ferent.yaml in $environment\n"
+
+        echo 'parameter_defaults:' >/home/{{ uc_user }}/fernet/fernet.yaml
+        echo '          controllerExtraConfig:' >>/home/{{ uc_user }}/fernet/fernet.yaml
+        echo "            keystone::token_provider: 'fernet'" >>/home/{{ uc_user }}/fernet/fernet.yaml
+
+        for YAML in fernet.yaml deployment-artifacts.yaml
+        do
+          cp /home/{{ uc_user }}/fernet/${YAML} {{ stack_templates }}/environments/
+        done
+      when: enable_fernet
+    - name: Generate overcloud-deploy.sh
+      copy:
+        content: |
+          #!/bin/bash
+          cd {{ uc_user }}
+          source ~/stackrc
+          time openstack overcloud deploy --templates \
+            -e {{ stack_templates }}/node-info.yaml \
+            -e {{ stack_templates }}/environments/network-environment.yaml \
+            -e {{ stack_templates }}/environments/storage-environment.yaml \
+            --log-file overcloud_deployment.log \
+            --ntp-server {{ ntp_server }}
+        dest: /home/{{ uc_user }}/overcloud-deploy.sh
+        owner: stack
+        group: stack
+        mode: u+rwx,g+rx,o+rx
+    - name: Add Fernet YAML's to overcloud-deploy.sh (if needed)
+      blockinfile:
+        path: /home/{{ uc_user }}/overcloud-deploy.sh
+        block: |2
+            -e {{ stack_templates }}/environments/fernet.yaml \
+            -e {{ stack_templates }}/environments/deployment-artifacts.yaml \
+        marker: "  # {mark} ANSIBLE FERNET BLOCK"
+        insertbefore: log-file overcloud_deployment.log
+    - name: Add roles_data.yaml if doing custom roles
+      lineinfile:
+        path: /home/{{ uc_user }}/overcloud-deploy.sh
+        insertafter: openstack overcloud deploy
+        line: '  -r {{ stack_templates }}/roles_data.yaml \'
+      when: custom_roles.stat.exists 

@@ -1,0 +1,22 @@
+# Undercloud/Director configuration
+    - director_provisioning_nic: eth1
+    - director_provisioning_network: 10.9.64.96/27
+    - director_provisioning_gateway: 10.9.64.97
+    - director_provisioning_dhcp_start: 10.9.64.100
+    - director_provisioning_dhcp_end: 10.9.64.110
+    - director_provisioning_introspection_start: 10.9.64.111
+    - director_provisioning_introspection_end: 10.9.64.120
+    - director_provisioning_mtu: 1500
+    - director_local_ip: 10.9.64.125
+    - director_public_vip: 10.9.64.133
+    - director_admin_vip: 10.9.64.126
+# Overcloud configuration
+    - networks:
+      - { network: "InternalApi", cidr: "10.9.64.48/28", vlan: "113", pool: "[{'start': '10.9.64.53', 'end': '10.9.64.62'}]", static_vip: "True", vip: 10.9.64.52 }
+      - { network: "Storage", cidr: "10.9.64.64/28", vlan: "114", pool: "[{'start': '10.9.64.69', 'end': '10.9.64.79'}]", static_vip: "True", vip: 10.9.64.68 }
+      - { network: "StorageMgmt", cidr: "10.9.64.80/24", vlan: "115", pool: "[{'start': '10.9.64.85', 'end': '10.9.64.94'}]", static_vip: "True", vip: 10.9.64.84 }
+      - { network: "Tenant", cidr: "10.9.64.0/27", vlan: "111", pool: "[{'start': '10.9.64.4', 'end': '10.9.64.30'}]", static_vip: "False" }
+      - { network: "External", cidr: "10.9.64.192/26", vlan: "118", pool: "[{'start': '10.9.64.200', 'end': '10.9.64.254'}]", static_vip: "True", vip: 10.9.64.196, default_route: 10.9.64.193 }
+    - dns_servers: '["10.11.5.19","10.5.30.160"]'
+    - ntp_server: clock.corp.redhat.com
+    - ssl_config: { enable_tls: "False", cloud_name: "darin-overcloud.redhat.lab", cloud_domain: "redhat.lab" }

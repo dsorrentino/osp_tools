@@ -17,8 +17,8 @@
 - name: Finalize undercloud deployment
   hosts: darin-undercloud
   vars_files:
-    - vars/environment.yaml
-    - vars/static.yaml
+    - vars/globals.yaml
+    - vars/networking.yaml
   vars:
     - enable_overcloud_root_password: True
     - overcloud_root_password: Redhat01

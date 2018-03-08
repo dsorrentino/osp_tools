@@ -1,0 +1,5 @@
+    - storage_config:
+      - { storage: 'cinder', iscsi: true, ceph: false, backup: 'swift' } # Backup can be either 'ceph' or 'swift'
+      - { storage: 'nova-ephemeral', use_ceph: false }
+      - { storage: 'glance', backend: 'swift' } # Backend may be swift, rbd (ceph) or file
+      - { storage: 'gnocchi', backend: 'swift' } # Backend may be swift, rbd (ceph) or file

@@ -7,8 +7,10 @@
 # The variables are pretty straight-forward.
 #
   vars_files:
-    - vars/environment.yaml
-    - vars/static.yaml
+    - vars/globals.yaml
+    - vars/networking.yaml
+    - vars/storage.yaml
+    - vars/services.yaml
   vars:
     - nodes:
       - { count_parameter: "ControllerCount", flavor_parameter: "OvercloudControlFlavor", flavor: "control", count: 1, custom_role: "False" }
@@ -19,13 +21,6 @@
     - overcloud_timezone: 'US/Eastern'
     - base_templates: "network-environment.yaml,network-isolation.yaml,storage-environment.yaml"
     - template_files: []
-    - storage_config:
-      - { storage: 'cinder', iscsi: true, ceph: false, backup: 'swift' } # Backup can be either 'ceph' or 'swift'
-      - { storage: 'nova-ephemeral', use_ceph: false }
-      - { storage: 'glance', backend: 'swift' } # Backend may be swift, rbd (ceph) or file
-      - { storage: 'gnocchi', backend: 'swift' } # Backend may be swift, rbd (ceph) or file
-    - enable_fernet: True
-    - deploy_ironic: True
     - ironic_cleaning_network_name: baremetal
   tasks:
     - name: Check if undercloud is deployed

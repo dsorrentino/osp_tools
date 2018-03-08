@@ -4,9 +4,9 @@
     - vars/globals.yaml
     - vars/networking.yaml
     - vars/services.yaml
+    - vars/storage.yaml
   vars:
     - registry_type: local # Can be local, remote or satellite
-    - include_ceph: False # Include the ceph container images or not
     - ceph_image: rhceph-2-rhel7
     - ceph_tag: 2.4-4
   tasks:
@@ -17,6 +17,34 @@
         owner: "{{ uc_user }}"
         group: "{{ uc_user }}"
         mode: u+rwx,g+rx,o+rx
+    - name: Create a default fact that we are not using Ceph
+      set_fact:
+        include_ceph: False
+    - name: Update ceph fact if Cinder is uing Ceph
+      set_fact:
+        include_ceph: True
+      with_items: "{{ storage_config }}"
+      when: item.storage == "cinder" and item.ceph
+    - name: Update ceph fact if Cinder Backup is uing Ceph
+      set_fact:
+        include_ceph: True
+      with_items: "{{ storage_config }}"
+      when: item.storage == "cinder" and item.backup == "ceph"
+    - name: Update ceph fact if Nova-ephemeral is uing Ceph
+      set_fact:
+        include_ceph: True
+      with_items: "{{ storage_config }}"
+      when: item.storage == "nova-ephemeral" and item.use_ceph
+    - name: Update ceph fact if Glance is uing Ceph
+      set_fact:
+        include_ceph: True
+      with_items: "{{ storage_config }}"
+      when: item.storage == "glance" and item.backend == "rbd"
+    - name: Update ceph fact if Gnocchi is uing Ceph
+      set_fact:
+        include_ceph: True
+      with_items: "{{ storage_config }}"
+      when: item.storage == "gnocchi" and item.backend == "rbd"
     - name: Get the latest tag for the images (Registry Type> {{ registry_type }})
       shell: |
         source /home/{{ uc_user }}/stackrc

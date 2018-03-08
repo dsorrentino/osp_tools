@@ -258,6 +258,43 @@
         replace: "GnocchiBackend: {{ item.backend }}"
       when: custom_storage.stat.exists == True and item.storage == "gnocchi"
       with_items: "{{ storage_config }}"
+    - name: Create a default fact that we are not using Ceph
+      set_fact:
+        include_ceph: False
+    - name: Update ceph fact if Cinder is uing Ceph
+      set_fact:
+        include_ceph: True
+      with_items: "{{ storage_config }}"
+      when: item.storage == "cinder" and item.ceph
+    - name: Update ceph fact if Cinder Backup is uing Ceph
+      set_fact:
+        include_ceph: True
+      with_items: "{{ storage_config }}"
+      when: item.storage == "cinder" and item.backup == "ceph"
+    - name: Update ceph fact if Nova-ephemeral is uing Ceph
+      set_fact:
+        include_ceph: True
+      with_items: "{{ storage_config }}"
+      when: item.storage == "nova-ephemeral" and item.use_ceph
+    - name: Update ceph fact if Glance is uing Ceph
+      set_fact:
+        include_ceph: True
+      with_items: "{{ storage_config }}"
+      when: item.storage == "glance" and item.backend == "rbd"
+    - name: Update ceph fact if Gnocchi is uing Ceph
+      set_fact:
+        include_ceph: True
+      with_items: "{{ storage_config }}"
+      when: item.storage == "gnocchi" and item.backend == "rbd"
+    - name: Remove references to Ceph components from storage-environment.yaml if not using Ceph
+      shell: |
+        sed -i '/{{ item }}/d' {{ custom_storage.stat.path }}
+      with_items: 
+        - ceph-mon.yaml
+        - ceph-osd.yaml
+        - ceph-client.yaml
+        - resource_registry
+      when: custom_storage.stat.exists == True and include_ceph == False
     - name: Check if we are using a custom network-isolation.yaml
       stat:
         path: "{{ stack_templates }}/environments/network-isolation.yaml"

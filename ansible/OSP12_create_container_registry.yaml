@@ -1,0 +1,101 @@
+- name: Configure container registry settings for OSP12 deployment
+  hosts: darin-undercloud
+  vars_files:
+    - vars/environment.yaml
+    - vars/static.yaml
+  vars:
+    - registry_type: local # Can be local, remote or satellite
+    - include_ceph: false # Include the ceph container images or not
+    - ceph_image: rhceph-2-rhel7
+    - ceph_tag: 2.4-4
+  tasks:
+    - name: Create a containers subdirectory for intermediate work files
+      file:
+        state: directory
+        path: /home/{{ uc_user }}/container_data
+        owner: "{{ uc_user }}"
+        group: "{{ uc_user }}"
+        mode: u+rwx,g+rx,o+rx
+    - name: Get the latest tag for the images
+      shell: |
+        source /home/{{ uc_user }}/stackrc
+        openstack overcloud container image tag discover --image registry.access.redhat.com/rhosp{{ osp_version }}/openstack-base:latest --tag-from-label version-release
+      register: osp_image_tag
+    - name: Generate a list of packages (Registry type> local)
+      shell: |
+        source /home/{{ uc_user }}/stackrc
+        openstack overcloud container image prepare \
+          --namespace=registry.access.redhat.com/rhosp{{ osp_version }} \
+          --prefix=openstack- \
+          --tag={{ osp_image_tag.stdout }} \
+          --output-images-file /home/{{ uc_user }}/container_data/local_registry_images.yaml
+      when: not include_ceph and registry_type == "local"
+    - name: Generate a list of packages (Registry type> local)
+      shell: |
+        source /home/{{ uc_user }}/stackrc
+        openstack overcloud container image prepare \
+          --namespace=registry.access.redhat.com/rhosp{{ osp_version }} \
+          --prefix=openstack- \
+          --tag={{ osp_image_tag.stdout }} \
+          -e {{ tripleo_heat_templates }}/environments/ceph-ansible/ceph-ansible.yaml \
+          --set ceph_namespace=registry.access.redhat.com/rhceph \
+          --set ceph_image={{ ceph_image }} \
+          --set ceph_tag={{ ceph_tag }} \
+          --output-images-file /home/{{ uc_user }}/container_data/local_registry_images.yaml
+      when: include_ceph and registry_type == "local"
+    - name: Uploading images locally (Registry type> local)
+      shell: |
+        source /home/{{ uc_user }}/stackrc
+        sudo openstack overcloud container image upload --config-file  /home/{{ uc_user }}/container_data/local_registry_images.yaml --verbose
+      when: registry_type == "local"
+    - name: Get local registry IP address (Registry type> local)
+      shell: "docker images | grep -v redhat.com | grep -o '^.*rhosp{{ osp_version }}' | sort -u | awk -F: '{print $1}'"
+      register: local_registry_ip
+      when: registry_type == "local"
+    - name: Create YAML for deployment (Registry type> local)
+      shell: |
+        source /home/{{ uc_user }}/stackrc
+        openstack overcloud container image prepare \
+          --namespace={{ local_registry_ip.stdout }}:8787/rhosp{{ osp_version }} \
+          --prefix=openstack- \
+          --tag={{ osp_image_tag.stdout }} \
+          --output-env-file={{ stack_templates }}/overcloud_images.yaml 
+      when: registry_type == "local"
+    - name: Create YAML for deployment (Registry type> local)
+      shell: |
+        source /home/{{ uc_user }}/stackrc
+        openstack overcloud container image prepare \
+          --namespace={{ local_registry_ip.stdout }}:8787/rhosp{{ osp_version }} \
+          --tag={{ osp_image_tag.stdout }} \
+          -e {{ tripleo_heat_templates }}/environments/ceph-ansible/ceph-ansible.yaml \
+          --set ceph_namespace={{ local_registry_ip.stdout }}:8787/rhceph \
+          --set ceph_image={{ ceph_image }} \
+          --set ceph_tag={{ ceph_tag }} \
+          --output-env-file={{ stack_templates }}/overcloud_images.yaml 
+      when: registry_type == "local" and include_ceph
+    - name: Create YAML for deployment (Registry type> remote)
+      shell: |
+        source /home/{{ uc_user }}/stackrc
+        openstack overcloud container image prepare \
+          --namespace=registry.access.redhat.com/rhosp{{ osp_version }} \
+          --prefix=openstack- \
+          --tag={{ osp_image_tag.stdout }} \
+          --output-env-file={{ stack_templates }}/overcloud_images.yaml 
+      when: registry_type == "remote"
+    - name: Create YAML for deployment (Registry type> remote)
+      shell: |
+        source /home/{{ uc_user }}/stackrc
+        openstack overcloud container image prepare \
+          --namespace=registry.access.redhat.com/rhosp{{ osp_version }} \
+          --tag={{ osp_image_tag.stdout }} \
+          -e {{ tripleo_heat_templates }}/environments/ceph-ansible/ceph-ansible.yaml \
+          --set ceph_namespace=registry.access.redhat.com/rhceph \
+          --set ceph_image={{ ceph_image }} \
+          --set ceph_tag={{ ceph_tag }} \
+          --output-env-file={{ stack_templates }}/overcloud_images.yaml 
+      when: registry_type == "remote" and include_ceph
+    - name: Add YAML file to {{ deploy_script }} if needed
+      lineinfile:
+        path: "{{ deploy_script }}"
+        insertbefore: log-file overcloud_deployment.log
+        line: '  -e {{ stack_templates }}/overcloud_images.yaml \'

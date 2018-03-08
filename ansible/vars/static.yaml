@@ -1,0 +1,7 @@
+# These are variables that probably won't change from release to release,
+# but you never know....
+    - uc_user: stack
+    - uc_pass: stack
+    - tripleo_heat_templates: /usr/share/openstack-tripleo-heat-templates
+    - stack_templates: /home/stack/templates
+    - deploy_script: /home/stack/overcloud_deploy.sh

@@ -1,3 +1,5 @@
+# Overall deployment version
+    - osp_version: 12
 # Undercloud/Director configuration
     - director_provisioning_nic: eth1
     - director_provisioning_network: 10.9.64.96/27

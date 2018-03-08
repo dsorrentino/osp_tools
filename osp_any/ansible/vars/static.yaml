@@ -1,4 +1,0 @@
-# These are variables that probably won't change from release to release,
-# but you never know....
-    - uc_user: stack
-    - uc_pass: stack

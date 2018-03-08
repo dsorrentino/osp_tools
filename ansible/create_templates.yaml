@@ -17,8 +17,6 @@
       - { count_parameter: "ComputeOsdCount", flavor_parameter: "OvercloudComputeOsdFlavor", flavor: "computeosd", count: 0, custom_role: "True", role_combine: "Compute,CephStorage" }
     - nic_configs: bond-with-vlans
     - overcloud_timezone: 'US/Eastern'
-    - tripleo_heat_templates: /usr/share/openstack-tripleo-heat-templates
-    - stack_templates: /home/stack/templates
     - base_templates: "network-environment.yaml,network-isolation.yaml,storage-environment.yaml"
     - template_files: []
     - storage_config:
@@ -28,6 +26,7 @@
       - { storage: 'gnocchi', backend: 'swift' } # Backend may be swift, rbd (ceph) or file
     - enable_fernet: True
     - deploy_ironic: True
+    - ironic_cleaning_network_name: baremetal
   tasks:
     - name: Check if undercloud is deployed
       shell: |
@@ -463,8 +462,11 @@
                   - ComputeFilter
                   - ComputeCapabilitiesFilter
                   - ImagePropertiesFilter
-          
               IronicCleaningDiskErase: metadata
+              ControllerExtraConfig:
+                 ironic::conductor::cleaning_network: {{ ironic_cleaning_network_name }}
+                 ironic::conductor::automated_clean: false
+          
         dest: "{{ stack_templates }}/environments/ironic-config.yaml"
         owner: stack
         group: stack
@@ -474,7 +476,7 @@
       copy:
         content: |
           #!/bin/bash
-          cd {{ uc_user }}
+          cd ~{{ uc_user }}
           source ~/stackrc
           time openstack overcloud deploy --templates \
             -e {{ stack_templates }}/node-info.yaml \
@@ -482,13 +484,13 @@
             -e {{ stack_templates }}/environments/storage-environment.yaml \
             --log-file overcloud_deployment.log \
             --ntp-server {{ ntp_server }}
-        dest: /home/{{ uc_user }}/overcloud-deploy.sh
+        dest: "{{ deploy_script }}"
         owner: stack
         group: stack
         mode: u+rwx,g+rx,o+rx
     - name: Add Fernet YAML's to overcloud-deploy.sh (if needed)
       blockinfile:
-        path: /home/{{ uc_user }}/overcloud-deploy.sh
+        path: "{{ deploy_script }}"
         block: |2
             -e {{ stack_templates }}/environments/fernet.yaml \
             -e {{ stack_templates }}/environments/deployment-artifacts.yaml \
@@ -502,10 +504,20 @@
       when: custom_roles.stat.exists 
     - name: Add Ironic YAML's to overcloud-deploy.sh (if needed)
       blockinfile:
-        path: /home/{{ uc_user }}/overcloud-deploy.sh
+        path: "{{ deploy_script }}"
         block: |2
             -e {{ stack_templates }}/environments/services/ironic.yaml \
             -e {{ stack_templates }}/environments/ironic-config.yaml \
         marker: "  # {mark} ANSIBLE IRONIC BLOCK"
         insertbefore: log-file overcloud_deployment.log
       when: deploy_ironic
+    - name: Check if we have a container repository YAML
+      stat:
+        path: "{{ stack_templates }}/overcloud_images.yaml"
+      register: container_images
+    - name: Add overcloud_images.yaml if a container repository exists
+      lineinfile:
+        path: "{{ deploy_script }}"
+        insertbefore: log-file overcloud_deployment.log
+        line: '  -e {{ stack_templates }}/overcloud_images.yaml \'
+      when: container_images.stat.exists 

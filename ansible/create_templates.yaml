@@ -512,6 +512,7 @@
           source ~/stackrc
           time openstack overcloud deploy --templates \
             -e {{ stack_templates }}/node-info.yaml \
+            -e {{ tripleo_heat_templates }}/environments/network-isolation.yaml \
             -e {{ stack_templates }}/environments/network-environment.yaml \
             -e {{ stack_templates }}/environments/storage-environment.yaml \
             --log-file overcloud_deployment.log \
@@ -553,3 +554,7 @@
         insertbefore: log-file overcloud_deployment.log
         line: '  -e {{ stack_templates }}/overcloud_images.yaml \'
       when: container_images.stat.exists 
+    - name: Strip out Ansible comments from the script
+      shell: |
+        sed -i '/ANSIBLE/d' {{ deploy_script }}
+

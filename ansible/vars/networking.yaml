@@ -13,7 +13,7 @@
 # Overcloud configuration
     - networks:
       - { network: "InternalApi", cidr: "10.9.64.48/28", vlan: "113", pool: "[{'start': '10.9.64.53', 'end': '10.9.64.62'}]", static_vip: "True", vip: 10.9.64.52 }
-      - { network: "Storage", cidr: "10.9.64.64/28", vlan: "114", pool: "[{'start': '10.9.64.69', 'end': '10.9.64.79'}]", static_vip: "True", vip: 10.9.64.68 }
+      - { network: "Storage", cidr: "10.9.64.64/28", vlan: "114", pool: "[{'start': '10.9.64.69', 'end': '10.9.64.78'}]", static_vip: "True", vip: 10.9.64.68 }
       - { network: "StorageMgmt", cidr: "10.9.64.80/24", vlan: "115", pool: "[{'start': '10.9.64.85', 'end': '10.9.64.94'}]", static_vip: "True", vip: 10.9.64.84 }
       - { network: "Tenant", cidr: "10.9.64.0/27", vlan: "111", pool: "[{'start': '10.9.64.4', 'end': '10.9.64.30'}]", static_vip: "False" }
       - { network: "External", cidr: "10.9.64.192/26", vlan: "118", pool: "[{'start': '10.9.64.200', 'end': '10.9.64.254'}]", static_vip: "True", vip: 10.9.64.196, default_route: 10.9.64.193 }

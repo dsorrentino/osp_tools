@@ -1,5 +1,5 @@
 - name: Configure container registry settings for OSP12 deployment
-  hosts: darin-undercloud
+  hosts: undercloud
   vars_files:
     - vars/globals.yaml
     - vars/networking.yaml

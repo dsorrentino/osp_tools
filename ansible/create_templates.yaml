@@ -1,5 +1,5 @@
 - name: Copy over the templates needed for a deployment
-  hosts: darin-undercloud
+  hosts: undercloud
 #
 # This playbook is intented to quickly create a base set of
 # overcloud deployment templates.

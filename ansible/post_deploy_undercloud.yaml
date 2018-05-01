@@ -15,7 +15,7 @@
 ##############################
 
 - name: Finalize undercloud deployment
-  hosts: darin-undercloud
+  hosts: undercloud
   vars_files:
     - vars/globals.yaml
     - vars/networking.yaml

@@ -22,23 +22,13 @@
 ##############################
 
 - name: Configure and deploy the undercloud
-  hosts: darin-undercloud
+  hosts: undercloud
   vars_files:
-    - vars/environment.yaml
-    - vars/static.yaml
+    - vars/networking.yaml
+    - vars/globals.yaml
+    - vars/undercloud_services.yaml
   vars:
     - rhel_version: 7
-    - generate_certificates: false
-    - enable_masquerading: true
-    - enable_uefi: false
-    - enable_debug: false
-    - enable_tempest: true
-    - enable_mistral: true
-    - enable_zaqar: true
-    - enable_telemetry: true
-    - enable_ui: true
-    - enable_validations: true
-    - store_ceilometer_events: true
   tasks:
     - name: Create user {{ uc_user }}
       user:

@@ -70,7 +70,11 @@
       with_items:
         - ansible.cfg
         - hosts
-        - vars/environment.yaml
+        - vars/globals.yaml
+        - vars/networking.yaml
+        - vars/services.yaml
+        - vars/storage.yaml
+        - vars/undercloud_services.yaml
         - create_templates.yaml
         - post_deploy_undercloud.yaml
     - name: Copy the undercloud.conf into the {{ uc_user }} home directory
@@ -125,6 +129,16 @@
         line: "undercloud_public_host = {{ director_public_vip }}"
       become: yes
       become_user: "{{ uc_user }}"
+      when: osp_version > 10
+    - name: Configure undercloud.conf - director_public_vip
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#undercloud_public_vip "
+        line: "undercloud_public_vip = {{ director_public_vip }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: osp_version < 11
     - name: Configure undercloud.conf - director_admin_vip
       lineinfile:
         path: ~/undercloud.conf
@@ -133,6 +147,16 @@
         line: "undercloud_admin_host = {{ director_admin_vip }}"
       become: yes
       become_user: "{{ uc_user }}"
+      when: osp_version > 10
+    - name: Configure undercloud.conf - director_admin_vip
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#undercloud_admin_vip "
+        line: "undercloud_admin_vip = {{ director_admin_vip }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: osp_version < 11
     - name: Configure undercloud.conf - generate_service_certificate 
       lineinfile:
         path: ~/undercloud.conf

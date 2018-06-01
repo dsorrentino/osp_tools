@@ -1,0 +1,266 @@
+- name: Configure a host to be used as a KVM host
+  hosts: kvm
+  vars:
+    - configure_networking: True
+    - interfaces:
+      - { name: "eno1", type: "Ethernet", device: "eno1", ip: "", prefix: "", gw: "", defroute: "", bootproto: "none" }
+      - { name: "eno1", type: "Bond-Slave", device: "eno1", ip: "", prefix: "", gw: "", defroute: "", master: "bond0" }
+      - { name: "eno2", type: "Ethernet", device: "eno2", ip: "", prefix: "", gw: "", defroute: "", bootproto: "none" }
+      - { name: "eno2", type: "Bond-Slave", device: "eno2", ip: "", prefix: "", gw: "", defroute: "", master: "bond0" }
+      - { name: "bond0", type: "Bond", device: "bond0", ip: "", prefix: "", gw: "", defroute: "" }
+      - { name: "br0-vlan100", type: "Bridge", device: "br0-vlan100", ip: "192.168.100.4", prefix: "24", gw: "192.168.100.1", bridged_device: "bond0", defroute: "yes" }
+      - { name: "bond0.120", type: "VLAN", device: "bond0.120", id: "120", ip: "", prefix: "", gw: "", defoute: "" }
+      - { name: "br0-vlan120", type: "Bridge", device: "br0-vlan120", ip: "192.168.120.4", prefix: "24", gw: "192.168.120.1", bridged_device: "bond0.120", defroute: "no" }
+      - { name: "bond0.130", type: "VLAN", device: "bond0.130", id: "130", ip: "", prefix: "", gw: "", defoute: "" }
+      - { name: "br0-vlan130", type: "Bridge", device: "br0-vlan130", ip: "192.168.130.4", prefix: "24", gw: "192.168.130.1", bridged_device: "bond0.130", defroute: "no" }
+      - { name: "bond0.140", type: "VLAN", device: "bond0.140", id: "140", ip: "", prefix: "", gw: "", defoute: "" }
+      - { name: "br0-vlan140", type: "Bridge", device: "br0-vlan140", ip: "192.168.140.4", prefix: "24", gw: "192.168.140.1", bridged_device: "bond0.140", defroute: "no" }
+      - { name: "bond0.150", type: "VLAN", device: "bond0.150", id: "150", ip: "", prefix: "", gw: "", defoute: "" }
+      - { name: "br0-vlan150", type: "Bridge", device: "br0-vlan150", ip: "192.168.150.4", prefix: "24", gw: "192.168.150.1", bridged_device: "bond0.150", defroute: "no" }
+  tasks:
+    - name: Ensure virtualization capabilities are enabled
+      command: egrep -c '(vmx|svm)' /proc/cpuinfo
+      register: core_count
+    - name: Validate core count
+      fail:
+        msg: "Error: Zero cores found for virtualization"
+      when: core_count.stdout == "0"
+    - name: Determine processor type of system
+      shell: |
+        cat /proc/cpuinfo  | grep ^vendor_id | sort -u  | head -1 | awk '{print $NF}'
+      register: processor_info
+    - name: Create Intel file modprobe file
+      file:
+        path: /etc/modprobe.d/kvm_intel.conf
+        state: touch
+        mode: "u=rw,g=r,o=r"
+      when: processor_info.stdout == 'GenuineIntel'
+    - name: Add KVM options to Intel modprobe file
+      lineinfile:
+        path: /etc/modprobe.d/kvm_intel.conf
+        state: present
+        regexp: "{{ item }}"
+        line: "{{ item }}"
+      with_items:
+        - 'options kvm-intel nested=1'
+        - 'options kvm-intel enable_shadow_vmcs=1'
+        - 'options kvm-intel enable_apicv=1'
+        - 'options kvm-intel ept=1'
+      when: processor_info.stdout == 'GenuineIntel'
+    - name: Create AMD file modprobe file
+      file:
+        path: /etc/modprobe.d/kvm_amd.conf
+        state: touch
+        mode: "u=rw,g=r,o=r"
+      when: processor_info.stdout == 'AuthenticAMD'
+    - name: Add KVM options to AMD modprobe file
+      lineinfile:
+        path: /etc/modprobe.d/kvm_intel.conf
+        state: present
+        regexp: "{{ item }}"
+        line: "{{ item }}"
+      with_items:
+        - 'options kvm-amd nested=1'
+      when: processor_info.stdout == 'AuthenticAMD'
+    - name: Create rp_filter file
+      file:
+        path: /etc/sysctl.d/98-rp-filter.conf
+        state: touch
+        mode: "u=rw,g=r,o=r"
+    - name: Load kernel modules for Intel
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - kvm
+        - kvm_intel
+      when: processor_info.stdout == 'GenuineIntel'
+    - name: Load kernel modules for AMD
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - kvm
+        - kvm_amd
+      when: processor_info.stdout == 'AuthenticAMD'
+    - name: Add filter options to rp_filter file
+      lineinfile:
+        path: /etc/sysctl.d/98-rp-filter.conf
+        state: present
+        regexp: "{{ item }}"
+        line: "{{ item }}"
+      with_items:
+        - 'net.ipv4.conf.default.rp_filter = 0'
+        - 'net.ipv4.conf.all.rp_filter = 0'
+    - name: Install necessary packages
+      yum:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - libvirt 
+        - qemu-kvm
+        - virt-manager
+        - virt-install
+        - libguestfs-tools
+        - libguestfs-xfs
+      when: not configure_networking 
+    - name: Enable and start libvirtd
+      service:
+        name: libvirtd
+        state: started
+        enabled: yes
+    - name: Backup NIC configs if they exist
+      shell: |
+        if [[ -f /etc/sysconfig/network-scripts/ifcfg-{{ item.name }} ]]
+        then
+          cp -p /etc/sysconfig/network-scripts/ifcfg-{{ item.name }} /etc/sysconfig/network-scripts/backup-ifcfg-{{ item.name }}-$(date +%Y%m%d-%H%M)
+        fi
+      with_items: "{{ interfaces }}"
+      when: configure_networking 
+    - name: Create files if needed
+      file:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        state: touch
+        mode: "u=rw,g=r,o=r"
+      with_items: "{{ interfaces }}"
+      when: configure_networking 
+    - name: Configure interface names
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^NAME=.*$"
+        line: "NAME={{ item.name }}"
+      with_items: "{{ interfaces }}"
+      when: configure_networking
+    - name: Configure interface type ETHERNET
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^TYPE=.*$"
+        line: "TYPE={{ item.type }}"
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.type == "Ethernet"
+    - name: Configure interface type BOND
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^TYPE=.*$"
+        line: "TYPE={{ item.type }}"
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.type == "Bond"
+    - name: Configure interface type BRIDGE
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^TYPE=.*$"
+        line: "TYPE={{ item.type }}"
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.type == "Bridge"
+    - name: Configure boot protocol
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^BOOTPROTO=.*$"
+        line: "BOOTPROTO={{ item.bootproto }}"
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.type == "Ethernet"
+    - name: Configure NM_CONTROLLED
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^NM_CONTROLLED=.*$"
+        line: "NM_CONTROLLED=false"
+      with_items: "{{ interfaces }}"
+      when: configure_networking
+    - name: Configure ZONE
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^ZONE=.*$"
+        line: "ZONE=public"
+      with_items: "{{ interfaces }}"
+      when: configure_networking
+    - name: Configure NOZEROCONF
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^NOZEROCONF=.*$"
+        line: "NOZEROCONF=true"
+      with_items: "{{ interfaces }}"
+      when: configure_networking
+    - name: Configure interface devices
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^DEVICE=.*$"
+        line: "DEVICE={{ item.device }}"
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.type != "Bond-Slave"
+    - name: Configure interface to start on boot
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^ONBOOT=.*$"
+        line: "ONBOOT=yes"
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.type != "Bond-Slave"
+    - name: Configure IP Addresses
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^IPADDR=.*$"
+        line: "IPADDR={{ item.ip }}"
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.ip != "" and item.prefix != "" and item.gw != ""
+    - name: Configure IP prefixes
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^PREFIX=.*$"
+        line: "PREFIX={{ item.prefix }}"
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.ip != "" and item.prefix != "" and item.gw != ""
+    - name: Configure gateways
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^GATEWAY=.*$"
+        line: "GATEWAY={{ item.gw }}"
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.ip != "" and item.prefix != "" and item.gw != ""
+    - name: Configure default routes
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^DEFROUTE=.*$"
+        line: "DEFROUTE={{ item.defroute }}"
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.ip != "" and item.prefix != "" and item.gw != ""
+    - name: Configure bonding master
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^BONDING_MASTER=.*$"
+        line: "BONDING_MASTER=yes"
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.type == "Bond"
+    - name: Configure bonding options
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^BONDING_OPTS=.*$"
+        line: "BONDING_OPTS=\"mode=1 miimon=100\""
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.type == "Bond"
+    - name: Configure bonding slaves
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^SLAVE=.*$"
+        line: "SLAVE=yes"
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.type == "Bond-Slave"
+    - name: Configure bonding slaves master name
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^MASTER=.*$"
+        line: "MASTER={{ item.master }}"
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.type == "Bond-Slave"
+    - name: Configure VLANs
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.name }}
+        regexp: "^VLAN=.*$"
+        line: "VLAN=yes"
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.type == "VLAN"
+    - name: Configure bridged device
+      lineinfile:
+        path: /etc/sysconfig/network-scripts/ifcfg-{{ item.bridged_device }}
+        regexp: "^BRIDGE=.*$"
+        line: "BRIDGE={{ item.name }}"
+      with_items: "{{ interfaces }}"
+      when: configure_networking and item.type == "Bridge"

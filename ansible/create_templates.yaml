@@ -74,9 +74,14 @@
     - name: Copy in the necessary template files
       shell: | 
         #!/bin/bash
-        DESTINATION_FILE=$(echo "{{ item.path }}" | sed 's|{{ tripleo_heat_templates }}|{{ stack_templates }}|g')
-        mkdir -p $(echo ${DESTINATION_FILE} | xargs dirname)
-        cp {{ item.path }} ${DESTINATION_FILE}
+        if [[ "{{ item.path }}" =~ "{{ tripleo_heat_templates }}/ci/" ]]
+        then
+          echo "Skipping continuous integration directory."
+        else
+          DESTINATION_FILE=$(echo "{{ item.path }}" | sed 's|{{ tripleo_heat_templates }}|{{ stack_templates }}|g')
+          mkdir -p $(echo ${DESTINATION_FILE} | xargs dirname)
+          cp {{ item.path }} ${DESTINATION_FILE}
+        fi
       with_items: "{{ find_results.files }}"
     - name: Copy roles_data.yaml if doing custom roles
       copy:

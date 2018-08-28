@@ -1,15 +1,15 @@
 # Undercloud/Director configuration
     - director_provisioning_nic: eth1
-    - director_provisioning_network: 10.9.64.96/27
-    - director_provisioning_gateway: 10.9.64.97
-    - director_provisioning_dhcp_start: 10.9.64.100
-    - director_provisioning_dhcp_end: 10.9.64.110
-    - director_provisioning_introspection_start: 10.9.64.111
-    - director_provisioning_introspection_end: 10.9.64.120
-    - director_provisioning_mtu: 1500
-    - director_local_ip: 10.9.64.125
-    - director_public_vip: 10.9.64.133
-    - director_admin_vip: 10.9.64.126
+    - director_provisioning_network: 172.16.0.11/24
+    - director_provisioning_gateway: 172.16.0.11
+    - director_provisioning_dhcp_start: 172.16.0.100
+    - director_provisioning_dhcp_end: 172.16.0.200
+    - director_provisioning_introspection_start: 172.16.0.50
+    - director_provisioning_introspection_end: 172.16.0.99
+    - director_provisioning_mtu: 8946
+    - director_local_ip: 172.16.0.11
+    - director_public_vip: 10.9.65.125
+    - director_admin_vip: 172.16.0.12
 # Overcloud configuration
     - networks:
       - { network: "InternalApi", cidr: "10.9.64.48/28", vlan: "113", pool: "[{'start': '10.9.64.53', 'end': '10.9.64.62'}]", static_vip: "True", vip: 10.9.64.52 }

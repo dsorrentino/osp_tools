@@ -34,12 +34,15 @@
       user:
         name: "{{ uc_user }}"
         password: "{{ uc_pass|password_hash('sha512') }}"
+      become: yes
     - name: Grant sudo to {{ uc_user }}
       shell: echo "{{ uc_user }} ALL=(root) NOPASSWD:ALL" | tee /etc/sudoers.d/{{ uc_user }} && chmod 0440 /etc/sudoers.d/{{ uc_user }}
+      become: yes
     - name: Configure repositories for Triple-O
       shell: |
              subscription-manager repos --disable=*
              subscription-manager repos --enable=rhel-{{ rhel_version }}-server-rpms --enable=rhel-{{ rhel_version }}-server-extras-rpms --enable=rhel-{{ rhel_version }}-server-rh-common-rpms --enable=rhel-ha-for-rhel-{{ rhel_version }}-server-rpms --enable=rhel-{{ rhel_version }}-server-openstack-{{ osp_version }}-rpms
+      become: yes
     - name: Install Triple-O Packages as well as director images
       yum:
         name: "{{ item }}"
@@ -48,6 +51,7 @@
         - python-tripleoclient
         - rhosp-director-images
         - rhosp-director-images-ipa
+      become: yes
     - name: Create images and templates directory for user {{ uc_user }}
       file:
         path: ~/{{ item }}
@@ -62,7 +66,7 @@
       become_user: "{{ uc_user }}"
     - name: Copy the basic Ansible files to the stack user
       copy:
-        src: /root/ansible/{{ item }}
+        src: "{{ item }}"
         dest: /home/{{ uc_user }}/ansible/{{ item }}
         owner: "{{ uc_user }}"
         group: "{{ uc_user }}"
@@ -103,7 +107,7 @@
         line: "local_ip = {{ director_local_ip }}/{{ director_provisioning_network_prefix.stdout }}"
       become: yes
       become_user: "{{ uc_user }}"
-    - name: Configure undercloud.conf - network_gateway 
+    - name: Configure undercloud.conf - network_gateway  (version <13)
       lineinfile:
         path: ~/undercloud.conf
         state: present
@@ -111,8 +115,17 @@
         line: "network_gateway = {{ director_local_ip }}"
       become: yes
       become_user: "{{ uc_user }}"
-      when: enable_masquerading
-    - name: Configure undercloud.conf - network_gateway 
+      when: enable_masquerading and osp_version < 13
+    - name: Configure undercloud.conf - gateway  (version 13+)
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#gateway "
+        line: "gateway = {{ director_local_ip }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: enable_masquerading and osp_version > 12
+    - name: Configure undercloud.conf - network_gateway (version <13)
       lineinfile:
         path: ~/undercloud.conf
         state: present
@@ -120,7 +133,16 @@
         line: "network_gateway = {{ director_provisioning_gateway }}"
       become: yes
       become_user: "{{ uc_user }}"
-      when: enable_masquerading == False
+      when: enable_masquerading == False and osp_version < 13
+    - name: Configure undercloud.conf - network_gateway (version 13+)
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#gateway "
+        line: "gateway = {{ director_provisioning_gateway }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: enable_masquerading == False and osp_version > 12
     - name: Configure undercloud.conf - director_public_vip
       lineinfile:
         path: ~/undercloud.conf
@@ -191,7 +213,7 @@
         line: "local_mtu = {{ director_provisioning_mtu }}"
       become: yes
       become_user: "{{ uc_user }}"
-    - name: Configure undercloud.conf - network_cidr
+    - name: Configure undercloud.conf - network_cidr (versions up to 13)
       lineinfile:
         path: ~/undercloud.conf
         state: present
@@ -199,7 +221,17 @@
         line: "network_cidr = {{ director_provisioning_network }}"
       become: yes
       become_user: "{{ uc_user }}"
-    - name: Configure undercloud.conf - masquerade_network
+      when: osp_version < 13
+    - name: Configure undercloud.conf - cidr (version 13+)
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#cidr "
+        line: "cidr = {{ director_provisioning_network }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: osp_version > 12
+    - name: Configure undercloud.conf - masquerade_network (version <13)
       lineinfile:
         path: ~/undercloud.conf
         state: present
@@ -207,7 +239,16 @@
         line: "masquerade_network = {{ director_provisioning_network }}"
       become: yes
       become_user: "{{ uc_user }}"
-      when: enable_masquerading
+      when: enable_masquerading and osp_version < 13
+    - name: Configure undercloud.conf - masquerade_network (version 13+)
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#masquerade "
+        line: "masquerade = true"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: enable_masquerading and osp_version > 12
     - name: Configure undercloud.conf - director_provisioning_dhcp_start
       lineinfile:
         path: ~/undercloud.conf

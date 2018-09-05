@@ -1,3 +1,3 @@
-  - deploy_ironic: True
+  - deploy_ironic: False
   - deploy_sahara: False
   - enable_fernet: True

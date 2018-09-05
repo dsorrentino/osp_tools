@@ -1,5 +1,19 @@
-    - storage_config:
-      - { storage: 'cinder', iscsi: true, ceph: false, backup: 'swift' } # Backup can be either 'ceph' or 'swift'
-      - { storage: 'nova-ephemeral', use_ceph: false }
-      - { storage: 'glance', backend: 'swift' } # Backend may be swift, rbd (ceph) or file
-      - { storage: 'gnocchi', backend: 'swift' } # Backend may be swift, rbd (ceph) or file
+  - storage_config:
+    - { storage: 'cinder', iscsi: false, ceph: true, backup: 'ceph' } # Backup can be either 'ceph' or 'swift'
+    - { storage: 'nova-ephemeral', use_ceph: true }
+    - { storage: 'glance', backend: 'rbd' } # Backend may be swift, rbd (ceph) or file
+    - { storage: 'gnocchi', backend: 'rbd' } # Backend may be swift, rbd (ceph) or file
+
+  - use_ceph: director # director, external or none
+  - ceph_node_capability: node:ceph
+  - ceph_root_disk: /dev/sda
+  - ceph_encrypt_osd: false
+  - ceph_mon_max_pg_per_osd: 3072
+  - ceph_journal_size: 5120
+  - ceph_osd_pool_default_size: 3
+  - ceph_osd_pool_default_min_size: 2
+  - ceph_osd_pool_default_pg_num: 128
+  - ceph_osd_pool_default_pgp_num: 128
+  - ceph_disks:
+    - { osd: '/dev/sdb', journal: '' } # Null journal indicates co-located
+    - { osd: '/dev/sdc', journal: '' } # Null journal indicates co-located, otherwise specify a device

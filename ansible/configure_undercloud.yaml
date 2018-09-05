@@ -73,7 +73,6 @@
         mode: u=rw,g=r,o=r
       with_items:
         - ansible.cfg
-        - hosts
         - vars/globals.yaml
         - vars/networking.yaml
         - vars/services.yaml
@@ -81,6 +80,15 @@
         - vars/undercloud_services.yaml
         - create_templates.yaml
         - post_deploy_undercloud.yaml
+    - name: Create ansible hosts file
+      copy:
+        dest: /home/{{ uc_user }}/ansible/hosts
+        content: |
+          [undercloud]
+          localhost ansible_connection=local
+        owner: "{{ uc_user }}"
+        group: "{{ uc_user }}"
+        mode: u=rw,g=r,o=r
     - name: Copy the undercloud.conf into the {{ uc_user }} home directory
       copy:
         remote_src: true
@@ -213,7 +221,7 @@
         line: "local_mtu = {{ director_provisioning_mtu }}"
       become: yes
       become_user: "{{ uc_user }}"
-    - name: Configure undercloud.conf - network_cidr (versions up to 13)
+    - name: Configure undercloud.conf - network_cidr (version <13)
       lineinfile:
         path: ~/undercloud.conf
         state: present
@@ -355,3 +363,9 @@
              for i in $(ls /usr/share/rhosp-director-images/overcloud-full-latest-{{ osp_version }}*.tar /usr/share/rhosp-director-images/ironic-python-agent-latest-{{ osp_version }}*.tar); do tar -xvf $i; done
       become: yes
       become_user: "{{ uc_user }}"
+    - name: Install ceph-ansible (version 13+)
+      yum:
+        name: ceph-ansible
+        state: present
+      become: yes
+      when: osp_version > 12

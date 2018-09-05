@@ -11,14 +11,9 @@
     - vars/networking.yaml
     - vars/storage.yaml
     - vars/services.yaml
+    - vars/nodes.yaml
+    - vars/undercloud_services.yaml
   vars:
-    - nodes:
-      - { count_parameter: "ControllerCount", flavor_parameter: "OvercloudControlFlavor", flavor: "control", count: 1, custom_role: "False" }
-      - { count_parameter: "ComputeCount", flavor_parameter: "OvercloudComputeFlavor", flavor: "compute", count: 1, custom_role: "False" }
-      - { count_parameter: "CephStorageCount", flavor_parameter: "OvercloudCephStorageFlavor", flavor: "ceph-storage", count: 0, custom_role: "False" }
-      - { count_parameter: "ComputeOsdCount", flavor_parameter: "OvercloudComputeOsdFlavor", flavor: "computeosd", count: 0, custom_role: "True", role_combine: "Compute,CephStorage" }
-    - nic_configs: bond-with-vlans
-    - overcloud_timezone: 'US/Eastern'
     - base_templates: "network-environment.yaml,network-isolation.yaml,storage-environment.yaml"
     - template_files: []
     - ironic_cleaning_network_name: baremetal
@@ -93,6 +88,19 @@
         group: "{{ uc_user }}"
       with_items: "{{ nodes }}"
       when: undercloud_deployed and item.custom_role == "True" and item.count != 0
+    - name: Copy fixed-ip-vips if needed (version 13+)
+      copy:
+        src: "{{ tripleo_heat_templates }}/environments/fixed-ip-vips.yaml"
+        dest: "{{ stack_templates }}/environments/fixed-ip-vips.yaml"
+      with_items: "{{ networks }}"
+      when: item.static_vip == "True" and osp_version > 12
+    - name: Check if we have a fixed-ip-vips.yaml (version 13+)
+      stat:
+        path: "{{ stack_templates }}/environments/fixed-ip-vips.yaml"
+      register: osp13_fixed_vips
+    - name: Comment existing fixed IPs (version 13+)
+      command: sed -e '/FixedIPs/ s/^#*/#/' -i {{ stack_templates }}/environments/fixed-ip-vips.yaml
+      when: osp13_fixed_vips.stat.exists == True
     - name: Create the services sub-directory under environments if needed.
       file:
         state: directory
@@ -131,11 +139,17 @@
         regexp: '\.\.\/puppet/'
         replace: "{{ tripleo_heat_templates }}/puppet/"
       with_items: "{{ template_files }}"
-    - name: Update relevant path names (network)
+    - name: Update relevant path names (network/config)
       replace:
         path: "{{ item }}"
         regexp: '\.\.\/network/config'
         replace: "{{ stack_templates }}/network/config"
+      with_items: "{{ template_files }}"
+    - name: Update relevant path names (network/ports)
+      replace:
+        path: "{{ item }}"
+        regexp: '\.\.\/network/ports'
+        replace: "{{ tripleo_heat_templates }}/network/ports"
       with_items: "{{ template_files }}"
     - name: Update relevant path names (docker)
       replace:
@@ -152,56 +166,64 @@
     - name: Obtain the controlplane gateway address from undercloud.conf
       shell: "grep '^network_gateway' /home/{{ uc_user }}/undercloud.conf | awk '{print $NF}'"
       register: control_plane_gw
-    - name: Update ControlPlaneSubnetCidr in network-environment.yaml
+    - name: Update ControlPlaneSubnetCidr in network-environment.yaml (version <13)
       replace:
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         regexp: 'ControlPlaneSubnetCidr:.*$'
         replace: "ControlPlaneSubnetCidr: '{{ control_plane_netmask.stdout }}'"
-    - name: Update EC2MetadataIp in network-environment.yaml
+      when: osp_version < 13
+    - name: Update EC2MetadataIp in network-environment.yaml (version <13)
       replace:
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         regexp: 'EC2MetadataIp:.*$'
         replace: "EC2MetadataIp: {{ control_plane_ip.stdout }}"
-    - name: Update ControlPlaneDefaultRoute in network-environment.yaml
+      when: osp_version < 13
+    - name: Update ControlPlaneDefaultRoute in network-environment.yaml (version <13)
       replace:
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         regexp: 'ControlPlaneDefaultRoute:.*$'
         replace: "ControlPlaneDefaultRoute: {{ control_plane_gw.stdout }}"
-    - name: Update networking cidr's in network-environment.yaml
+      when: osp_version < 13
+    - name: Update networking cidr's in network-environment.yaml (version <13)
       replace:
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         regexp: "{{ item.network }}NetCidr:.*"
         replace: "{{ item.network }}NetCidr: {{ item.cidr }}"
       with_items: "{{ networks }}"
-    - name: Update networking VLANs in network-environment.yaml
+      when: osp_version < 13
+    - name: Update networking VLANs in network-environment.yaml (version <13)
       replace:
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         regexp: "{{ item.network }}NetworkVlanID:.*"
         replace: "{{ item.network }}NetworkVlanID: {{ item.vlan }}"
       with_items: "{{ networks }}"
-    - name: Update networking allocation pools in network-environment.yaml
+      when: item.vlan != '' and osp_version < 13
+    - name: Update networking allocation pools in network-environment.yaml (version <13)
       replace:
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         regexp: "{{ item.network }}AllocationPools:.*"
         replace: "{{ item.network }}AllocationPools: {{ item.pool }}"
       with_items: "{{ networks }}"
-    - name: Update networking external network default route in network-environment.yaml
+      when: osp_version < 13
+    - name: Update networking external network default route in network-environment.yaml (version <13)
       replace:
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         regexp: "{{ item.network }}InterfaceDefaultRoute.*"
         replace: "{{ item.network }}InterfaceDefaultRoute: {{ item.default_route }}"
       with_items: "{{ networks }}"
-      when: item.network  == "External"
-    - name: Update networking DNS servers in network-environment.yaml
+      when: item.network  == "External" and osp_version < 13
+    - name: Update networking DNS servers in network-environment.yaml (version <13)
       replace:
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         regexp: "DnsServers:.*"
         replace: "DnsServers: {{ dns_servers }}"
-    - name: Update nic-configs location in network-environment.yaml
+      when: osp_version < 13
+    - name: Update nic-configs location in network-environment.yaml (version <13)
       replace:
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         regexp: "/single-nic-vlans/"
         replace: "/{{ nic_configs }}/"
+      when: osp_version < 13
     - name: Copy over the desired nic-configs
       copy:
         src: "{{ tripleo_heat_templates }}/network/config/{{ nic_configs }}"
@@ -393,7 +415,7 @@
           echo "  OS::TripleO::${ROLE_NAME}::Ports::${PORT_TYPE}: ${PORT_FILE}" >>{{ stack_templates }}/environments/network-isolation.yaml
         done
       with_items: "{{ nodes }}"
-      when: custom_isolation.stat.exists and custom_roles.stat.exists and item.custom_role == "True"
+      when: custom_isolation.stat.exists and custom_roles.stat.exists and item.custom_role == "True" and osp_version < 13
     - name: Copy YAML files for TLS configuration if using TLS
       copy:
         src: "{{ tripleo_heat_templates }}/{{ item }}"
@@ -419,29 +441,32 @@
       with_items:
         - { setting: "CloudName", value: "{{ ssl_config.cloud_name }}" }
         - { setting: "CloudDomain", value: "{{ ssl_config.cloud_domain }}" }
-      when: ssl_config.enable_tls == "True"
+      when: ssl_config.enable_tls == "True" and osp_version < 13
     - name: Add TimeZone info to network-environment.yaml
       lineinfile:
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         regexp: "  TimeZone:.*$"
         line: "  TimeZone: '{{ overcloud_timezone }}'"
+      when: osp_version < 13
     - name: Configure NTP Server
       lineinfile:
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         regexp: "  NtpServer:.*$"
         line: "  NtpServer: {{ ntp_server }}"
+      when: osp_version < 13
     - name: Configure any static VIPs
       lineinfile:
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         regexp: "  {{ item.network }}VirtualFixedIPs:.*$"
         line: "  {{ item.network }}VirtualFixedIPs: [{'ip_address':'{{ item.vip }}'}]"
       with_items: "{{ networks }}"
-      when: item.static_vip == "True"
+      when: item.static_vip == "True" and osp_version < 13
     - name: Change the External VIP name from External to Public because it'd the only weird one
       replace:
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         regexp: "ExternalVirtualFixedIPs"
         replace: "PublicVirtualFixedIPs"
+      when: osp_version < 13
     - name: Enable Fernet Tokens in the Overcloud
       shell: |
         #!/bin/bash
@@ -472,19 +497,19 @@
         do
           cp /home/{{ uc_user }}/fernet/${YAML} {{ stack_templates }}/environments/
         done
-      when: enable_fernet
+      when: enable_fernet and osp_version < 13
     - name: Add bridge mappings for Ironic 
       lineinfile:
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         insertafter: NeutronNetworkVLANRanges
         line: '  NeutronBridgeMappings: datacentre:br-ex,baremetal:br-baremetal'
-      when: deploy_ironic
+      when: deploy_ironic and osp_version < 13
     - name: Add flat network for Ironic 
       lineinfile:
         path: "{{ stack_templates }}/environments/network-environment.yaml"
         insertafter: NeutronBridgeMappings
         line: '  NeutronFlatNetworks: datacentre,baremetal'
-      when: deploy_ironic
+      when: deploy_ironic and osp_version < 13
     - name: Generate ironic-config.yaml
       copy:
         content: |
@@ -509,7 +534,7 @@
         group: stack
         mode: u+rw,g+r,o+r
       when: deploy_ironic
-    - name: Generate overcloud-deploy.sh
+    - name: Generate base {{ deploy_script }}
       copy:
         content: |
           #!/bin/bash
@@ -517,15 +542,30 @@
           source ~/stackrc
           time openstack overcloud deploy --templates \
             -e {{ stack_templates }}/node-info.yaml \
-            -e {{ tripleo_heat_templates }}/environments/network-isolation.yaml \
-            -e {{ stack_templates }}/environments/network-environment.yaml \
             -e {{ stack_templates }}/environments/storage-environment.yaml \
+            -e {{ tripleo_heat_templates }}/environments/network-isolation.yaml \
             --log-file overcloud_deployment.log \
             --ntp-server {{ ntp_server }}
         dest: "{{ deploy_script }}"
         owner: stack
         group: stack
         mode: u+rwx,g+rx,o+rx
+    - name: Add networking configuration to the overcloud-deploy.sh (version <13)
+      lineinfile:
+        path: "{{ deploy_script }}"
+        state: present
+        line: "  -e {{ stack_templates }}/environments/network-environment.yaml \\"
+        regexp: ".*-e {{ stack_templates }}/environments/network-environment.yaml \\.*"
+        insertafter: '.*/network-isolation.yaml.*'
+      when: osp_version < 13
+    - name: Add networking configuration to the overcloud-deploy.sh (version 13+)
+      lineinfile:
+        path: "{{ deploy_script }}"
+        state: present
+        line: "  -n {{ stack_templates }}/network_data.yaml \\"
+        regexp: ".*  -n {{ stack_templates }}/network_data.yaml \\.*"
+        insertafter: '.*openstack overcloud deploy.*'
+      when: osp_version > 12
     - name: Add Fernet YAML's to overcloud-deploy.sh (if needed)
       blockinfile:
         path: "{{ deploy_script }}"
@@ -534,6 +574,7 @@
             -e {{ stack_templates }}/environments/deployment-artifacts.yaml \
         marker: "  # {mark} ANSIBLE FERNET BLOCK"
         insertbefore: log-file overcloud_deployment.log
+      when: osp_version < 13
     - name: Add roles_data.yaml if doing custom roles
       lineinfile:
         path: /home/{{ uc_user }}/overcloud-deploy.sh
@@ -549,6 +590,263 @@
         marker: "  # {mark} ANSIBLE IRONIC BLOCK"
         insertbefore: log-file overcloud_deployment.log
       when: deploy_ironic
+    - name: Remove network_roles.yaml if it exists (version 13+)
+      file:
+        path: /home/{{ uc_user }}/templates/{{ item }}
+        state: absent
+      with_items:
+        - network_data.yaml
+    - name: Create network_roles.yaml (version 13+)
+      shell: |
+        #!/bin/bash
+        NAME_LOWER=$(echo {{ item.network }} | tr '[:upper:]' '[:lower:]')
+        case ${NAME_LOWER} in
+          storagemgmt)
+            NAME_LOWER="storage_mgmt"
+            ;;
+          internalapi)
+            NAME_LOWER="internal_api"
+            ;;
+        esac
+
+        HAS_VIP=$( echo {{ item.static_vip }} | tr '[:upper:]' '[:lower:]')
+        NETWORK={{ item.network }}
+        VLAN={{ item.vlan }}
+
+        echo "- name : ${NETWORK}" >> /home/{{ uc_user }}/templates/network_data.yaml
+        echo "  vip: ${HAS_VIP}" >> /home/{{ uc_user }}/templates/network_data.yaml
+        if [[ "${HAS_VIP}" == "true" && -f /home/{{ uc_user }}/templates/environments/fixed-ip-vips.yaml ]]
+        then
+          VIP={{ item.vip }}
+          if [[ "${NETWORK}" == "External" ]]
+          then
+            NETWORK="Public"
+          fi
+          sed -i "/${NETWORK}VirtualFixedIPs/d" /home/{{ uc_user }}/templates/environments/fixed-ip-vips.yaml
+          echo "  ${NETWORK}VirtualFixedIPs: [{'ip_address':'${VIP}'}]" >> /home/{{ uc_user }}/templates/environments/fixed-ip-vips.yaml
+        fi
+        echo "  name_lower: ${NAME_LOWER}" >> /home/{{ uc_user }}/templates/network_data.yaml
+        if [[ ! -z "${VLAN}" ]]
+        then
+          echo "  vlan: ${VLAN}" >> /home/{{ uc_user }}/templates/network_data.yaml
+        fi
+        echo "  ip_subnet: '{{ item.cidr }}'" >> /home/{{ uc_user }}/templates/network_data.yaml
+        echo "  allocation_pools: {{ item.pool }}" >> /home/{{ uc_user }}/templates/network_data.yaml
+      with_items: "{{ networks }}"
+      when: osp_version > 12
+    - name: List the baremetal nodes from stored in Ironic
+      shell: |
+        #!/bin/bash
+        source ~/stackrc
+        openstack baremetal node list -c Name -f value >/tmp/overcloud_baremetal.txt
+        if [ ! -s /tmp/overcloud_baremetal.txt ]
+        then
+          rm /tmp/overcloud_baremetal.txt
+        fi
+    - name: Check if baremetal nodes exist in Ironic (file check)
+      stat:
+        path: /tmp/overcloud_baremetal.txt
+      register: baremetal_nodes
+    - name: Check if the nodes have been introspected (ceph)
+      shell: | 
+        #!/bin/bash
+        source ~stack/stackrc
+        WORK_DIRECTORY=$(mktemp -p /tmp -d ansible.check_introspecton.XXXXXX)
+        for NODE in $(openstack baremetal node list -c Name -f value)
+        do
+          INTROSPECTION_STATUS=$(openstack baremetal introspection status -c finished -f value ${NODE} 2>/dev/null)
+          if [[ -z "${INTROSPECTION_STATUS}" || "${INTROSPECTION_STATUS}" != "True" ]]
+          then
+            INTROSPECTION_STATUS="not_introspected"
+          else
+            INTROSPECTION_STATUS="introspected"
+          fi
+          NODE_TYPE="node"
+          if [[ ! -z "$(openstack baremetal node show -c properties -f value ${NODE} | grep {{ ceph_node_capability }})" ]]
+          then
+            NODE_TYPE="CEPH"
+          fi
+          echo "${NODE}:${INTROSPECTION_STATUS}:${NODE_TYPE}" >>${WORK_DIRECTORY}/overcloud_baremetal.txt
+        done
+        CEPH_NODES=$(grep "CEPH" ${WORK_DIRECTORY}/overcloud_baremetal.txt | wc -l)
+        CEPH_INTROSPECTED=$(grep ':introspected:CEPH' ${WORK_DIRECTORY}/overcloud_baremetal.txt | wc -l)
+        if [[ ${CEPH_NODES} -gt 0 && ${CEPH_INTROSPECTED} -gt 0 && ${CEPH_NODES} -eq ${CEPH_INTROSPECTED} ]]
+        then
+          echo "true"
+        else
+          echo "false"
+        fi
+        rm -rf ${WORK_DIRECTORY} 2>/dev/null
+      register: introspection_status
+      when: baremetal_nodes.stat.exists and use_ceph == 'director'
+    - name: Configure root_disk (if possible) (ceph)
+      shell: | 
+        #!/bin/bash
+        source ~stack/stackrc
+        WORK_DIRECTORY=$(mktemp -p /tmp -d ansible.configure_ceph_root_disk.XXXXXX)
+        ROOT_DISK={{ ceph_root_disk }}
+        CEPH_NODES=""
+        for NODE in $(openstack baremetal node list -f value -c Name)
+        do
+          if [[ ! -z "$(openstack baremetal node show -c properties -f value ${NODE} | grep {{ ceph_node_capability }})" ]]
+          then
+            CEPH_NODES="${CEPH_NODES} ${NODE}"
+            openstack baremetal introspection data save ${NODE} >${WORK_DIRECTORY}/${NODE}.introspection
+          fi
+        done
+
+        ERROR_COUNT=0
+        for NODE_NAME in ${CEPH_NODES}
+        {
+          if [[ ! -r ${WORK_DIRECTORY}/${NODE_NAME}.introspection ]]
+          then
+            ERROR_COUNT=$(( ${ERROR_COUNT} + 1 ))
+          else
+            DATA_FILE=${WORK_DIRECTORY}/${NODE_NAME}.introspection
+            if [[ -z "$(grep ${ROOT_DISK} ${DATA_FILE})" ]]
+            then
+              ERROR_COUNT=$(( ${ERROR_COUNT} + 1 ))
+            else
+              WWN=$(cat ${DATA_FILE} | jq '.inventory.disks | .[] | select( .name | contains("{{ ceph_root_disk }}"))' | grep '"wwn"' | awk -F: '{print $2}' | sed 's/[", ]//g')
+              SERIAL=$(cat ${DATA_FILE} | jq '.inventory.disks | .[] | select( .name | contains("{{ ceph_root_disk }}"))' | grep '"serial"' | awk -F: '{print $2}' | sed 's/[", ]//g')
+              if [[ "${WWN}" == "null" ]]
+              then
+                openstack baremetal node set --property root_device="{'serial': '${SERIAL}'}" ${NODE_NAME}
+              else
+                openstack baremetal node set --property root_device="{'wwn': '${WWN}'}" ${NODE_NAME}
+              fi
+              openstack baremetal node show -c name -c properties ${NODE_NAME}
+            fi
+          fi
+        }
+        rm -rf ${WORK_DIRECTORY} 2>/dev/null
+        exit ${ERROR_COUNT}
+      when: baremetal_nodes.stat.exists and introspection_status.stdout == 'true' and use_ceph == 'director'
+    - name: Create Ceph storage configuration (if needed) (version 13+)
+      shell: | 
+        #!/bin/bash
+        CEPH_CUSTOM_CONFIG=/home/{{ uc_user }}/templates/ceph-custom-config.yaml
+        echo "parameter_defaults:" >${CEPH_CUSTOM_CONFIG}
+        echo "  CephConfigOverrides:" >>${CEPH_CUSTOM_CONFIG}
+        echo "    mon_max_pg_per_osd: {{ ceph_mon_max_pg_per_osd }}" >>${CEPH_CUSTOM_CONFIG}
+        echo "    journal_size: {{ ceph_journal_size }}" >>${CEPH_CUSTOM_CONFIG}
+        echo "    osd_pool_default_size: {{ ceph_osd_pool_default_size }}" >>${CEPH_CUSTOM_CONFIG}
+        echo "    osd_pool_default_min_size: {{ ceph_osd_pool_default_min_size }}" >>${CEPH_CUSTOM_CONFIG}
+        echo "    osd_pool_default_pg_num: {{ ceph_osd_pool_default_pg_num }}" >>${CEPH_CUSTOM_CONFIG}
+        echo "    osd_pool_default_pgp_num: {{ ceph_osd_pool_default_pgp_num }}" >>${CEPH_CUSTOM_CONFIG}
+        echo "  CephAnsibleDisksConfig:" >>${CEPH_CUSTOM_CONFIG}
+        echo "    dmcrypt: {{ ceph_encrypt_osd }}" >>${CEPH_CUSTOM_CONFIG}
+      when: use_ceph == 'director' and osp_version >12
+    - name: Add OSD's to the configuration file (version 13+)
+      shell: |
+        #!/bin/bash
+        CEPH_CUSTOM_CONFIG=/home/{{ uc_user }}/templates/ceph-custom-config.yaml
+        OSD={{ item.osd }}
+        JOURNAL={{ item.journal }}
+        if [[ ! -z "{{ item.journal }}" && -z "$(grep "    osd_scenario: non-collocated" ${CEPH_CUSTOM_CONFIG})" ]]
+        then
+          echo "    osd_scenario: non-collocated" >>${CEPH_CUSTOM_CONFIG}
+        fi
+        if [[ -z "$(grep "    devices:" ${CEPH_CUSTOM_CONFIG})" ]]
+        then
+          echo "    devices:" >>${CEPH_CUSTOM_CONFIG}
+        fi
+        echo "      - ${OSD}" >>${CEPH_CUSTOM_CONFIG}
+      with_items: "{{ ceph_disks }}"
+      when: use_ceph == 'director' and osp_version >12
+    - name: Add Journal's to the configuration file (if needed) (version 13+)
+      shell: |
+        #!/bin/bash
+        CEPH_CUSTOM_CONFIG=/home/{{ uc_user }}/templates/ceph-custom-config.yaml
+        JOURNAL={{ item.journal }}
+        if [[ -z "$(grep "    dedicated_devices:" ${CEPH_CUSTOM_CONFIG})" ]]
+        then
+          echo "    dedicated_devices:" >>${CEPH_CUSTOM_CONFIG}
+        fi
+        echo "      - ${JOURNAL}" >>${CEPH_CUSTOM_CONFIG}
+      with_items: "{{ ceph_disks }}"
+      when: use_ceph == 'director' and osp_version >12 and item.journal != ''
+    - name: Add ceph configuration to the overcloud-deploy.sh (version 13+)
+      lineinfile:
+        path: "{{ deploy_script }}"
+        state: present
+        line: "  -e /home/{{ uc_user }}/templates/ceph-custom-config.yaml \\"
+        regexp: ".*-e /home/{{ uc_user }}/templates/ceph-custom-config.yaml \\.*"
+        insertafter: '.*storage-environment.yaml.*'
+      when: use_ceph == 'director' and osp_version > 12
+    - name: Delete /home/{{ uc_user }}/configure_containers.sh if it exists
+      file:
+        path: /home/{{ uc_user }}/configure_containers.sh
+        state: absent
+    - name: Create /home/{{ uc_user }}/configure_containers.sh
+      file:
+        path: /home/{{ uc_user }}/configure_containers.sh
+        state: touch
+        owner: "{{ uc_user }}"
+        group: "{{ uc_user }}"
+        mode: 0755
+    - name: Create script to perform necessary container generation (version 12+)
+      blockinfile:
+        path: /home/{{ uc_user }}/configure_containers.sh
+        block: |
+          #!/bin/bash
+          source /home/{{ uc_user }}/stackrc
+          openstack overcloud container image prepare \
+        marker: "  # {mark} ANSIBLE BLOCK SCRIPT"
+    - name: Create script to perform necessary container generation (version 12+)
+      shell: |
+        egrep ' -e ' {{ deploy_script }} >>/home/{{ uc_user }}/configure_containers.sh
+      when: osp_version > 11
+    - name: Create script to perform necessary container generation (version 12+)
+      blockinfile:
+        path: /home/{{ uc_user }}/configure_containers.sh
+        block: |2
+            --output-env-file=/home/{{ uc_user }}/templates/overcloud_images.yaml \
+            --output-images-file /home/{{ uc_user }}/registry_images.yaml
+        marker: "  # {mark} ANSIBLE BLOCK IMAGES"
+      when: osp_version > 11
+    - name: Add ceph container image lines if needed (version 12+)
+      blockinfile:
+        path: /home/{{ uc_user }}/configure_containers.sh
+        block: |2
+            -e /usr/share/openstack-tripleo-heat-templates/environments/ceph-ansible/ceph-ansible.yaml \
+            --set ceph_namespace=registry.access.redhat.com/rhceph \
+            --set ceph_image=rhceph-3-rhel7 \
+            --tag-from-label {version}-{release} \
+        marker: "  # {mark} ANSIBLE BLOCK CEPH"
+        insertbefore: overcloud_images.yaml
+      when: use_ceph == 'director' and osp_version > 11
+    - name: Obtain push-destination IP if using a local registry
+      shell: |
+        ip a s br-ctlplane | grep inet | head -1 | awk '{print $2}' | awk -F/ '{print $1}'
+      register: registry_ip
+      when: osp_version > 11 and container_registry == 'local'
+    - name: Add local namespace information (version 12+)
+      blockinfile:
+        path: /home/{{ uc_user }}/configure_containers.sh
+        block: |2
+            --namespace={{ container_namespace }} \
+            --push-destination={{ registry_ip.stdout }}:8787 \
+            --prefix={{ container_prefix }}- \
+        marker: "  # {mark} ANSIBLE BLOCK LOCAL"
+        insertafter: openstack overcloud container image prepare
+      when: osp_version > 11 and container_registry == 'local'
+    - name: Strip out Ansible comments from the script
+      shell: |
+        sed -i '/ANSIBLE/d' {{ item }}
+      with_items:
+        - /home/{{ uc_user }}/configure_containers.sh
+    - name: Generate the overcloud image files (version 12+)
+      shell: |
+        /home/{{ uc_user }}/configure_containers.sh
+      when: osp_version > 11
+    - name: Upload images to local registry (version 12+)
+      shell: |
+        openstack overcloud container image upload \
+          --config-file /home/{{ uc_user }}/registry_images.yaml \
+          --verbose
+      become: true
+      when: osp_version > 11 and container_registry == 'local'
     - name: Check if we have a container repository YAML
       stat:
         path: "{{ stack_templates }}/overcloud_images.yaml"
@@ -561,5 +859,6 @@
       when: container_images.stat.exists 
     - name: Strip out Ansible comments from the script
       shell: |
-        sed -i '/ANSIBLE/d' {{ deploy_script }}
-
+        sed -i '/ANSIBLE/d' {{ item }}
+      with_items:
+        - "{{ deploy_script }}"

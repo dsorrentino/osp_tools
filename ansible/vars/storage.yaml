@@ -4,8 +4,9 @@
     - { storage: 'glance', backend: 'rbd' } # Backend may be swift, rbd (ceph) or file
     - { storage: 'gnocchi', backend: 'rbd' } # Backend may be swift, rbd (ceph) or file
 
-  - use_ceph: director # director, external or none
+  - ceph_deployment: director # director, external or none
   - ceph_node_capability: node:ceph
+  - ceph_configure_root_disk: false
   - ceph_root_disk: /dev/sda
   - ceph_encrypt_osd: false
   - ceph_mon_max_pg_per_osd: 3072

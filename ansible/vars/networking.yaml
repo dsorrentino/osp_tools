@@ -12,10 +12,10 @@
   - director_admin_vip: 172.16.0.12
 # Overcloud configuration
   - networks:
-    - { network: "InternalApi", cidr: "172.16.1.0/24", vlan: "20", pool: "[{'start': '172.16.1.20', 'end': '172.16.1.200'}]", static_vip: "True", vip: 172.16.1.10 }
-    - { network: "Storage", cidr: "172.16.3.0/24", vlan: "30", pool: "[{'start': '172.16.3.20', 'end': '172.16.3.200'}]", static_vip: "True", vip: 172.16.3.10 }
-    - { network: "StorageMgmt", cidr: "172.16.4.0/24", vlan: "40", pool: "[{'start': '172.16.4.20', 'end': '172.16.4.200'}]", static_vip: "True", vip: 172.16.4.10 }
-    - { network: "Tenant", cidr: "172.16.2.0/24", vlan: "50", pool: "[{'start': '172.16.2.20', 'end': '172.16.2.200'}]", static_vip: "False", vip: '' }
+    - { network: "InternalApi", cidr: "172.16.1.0/24", vlan: "20", pool: "[{'start': '172.16.1.20', 'end': '172.16.1.200'}]", static_vip: "True", vip: 172.16.1.10, default_route: '' }
+    - { network: "Storage", cidr: "172.16.3.0/24", vlan: "30", pool: "[{'start': '172.16.3.20', 'end': '172.16.3.200'}]", static_vip: "True", vip: 172.16.3.10, default_route: '' }
+    - { network: "StorageMgmt", cidr: "172.16.4.0/24", vlan: "40", pool: "[{'start': '172.16.4.20', 'end': '172.16.4.200'}]", static_vip: "True", vip: 172.16.4.10, default_route: '' }
+    - { network: "Tenant", cidr: "172.16.2.0/24", vlan: "50", pool: "[{'start': '172.16.2.20', 'end': '172.16.2.200'}]", static_vip: "False", vip: '', default_route: '' }
     - { network: "External", cidr: "10.9.65.128/26", vlan: "10", pool: "[{'start': '10.9.65.175', 'end': '10.9.65.179'}]", static_vip: "True", vip: 10.9.65.171, default_route: 10.9.65.129 }
   - dns_servers: '["10.9.71.7","8.8.4.4"]'
   - ntp_server: clock.corp.redhat.com

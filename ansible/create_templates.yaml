@@ -566,7 +566,7 @@
           time openstack overcloud deploy --templates \
             -e {{ stack_templates }}/node-info.yaml \
             -e {{ stack_templates }}/environments/storage-environment.yaml \
-            -e {{ tripleo_heat_templates }}/environments/network-environment.yaml \
+            -e {{ stack_templates }}/environments/network-environment.yaml \
             -e {{ tripleo_heat_templates }}/environments/network-isolation.yaml \
             --log-file overcloud_deployment.log \
             --ntp-server {{ ntp_server }}
@@ -827,7 +827,7 @@
           --config-file /home/{{ uc_user }}/registry_images.yaml \
           --verbose
       become: true
-      when: osp_version > 19 and container_registry == 'local'
+      when: osp_version >= 12 and container_registry == 'local'
     - name: Check if we have a container repository YAML
       stat:
         path: "{{ stack_templates }}/overcloud_images.yaml"
@@ -856,7 +856,7 @@
               SSL_ENABLED='false'
             fi
           else
-            SSL_CERT=$(sudo ls /etc/pki/tls/certs/undercloud-*.crt)
+            SSL_CERT=$(sudo ls -tr /etc/pki/ca-trust/source/anchors/*.pem | tail -1)
           fi
         fi
         

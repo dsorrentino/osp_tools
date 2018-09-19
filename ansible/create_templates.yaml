@@ -25,6 +25,12 @@
     - name: Set undercloud_deployed fact
       set_fact:
         undercloud_deployed: "{{ undercloud_deployed.stdout }}"
+    - name: Add ceph-ansible (version 13+)
+      yum:
+        name: ceph-ansible
+        state: latest
+      become: true
+      when: osp_version >= 13
     - name: Create the necessary templates directories if needed
       file:
         path: "{{ item }}"
@@ -291,51 +297,47 @@
         src: "{{ tripleo_heat_templates }}/network/config/{{ nic_configs }}"
         dest: "{{ stack_templates }}/network/config/"
       when: osp_version < 13
-    - name: Check if we are using a custom storage-environment.yaml
-      stat:
-        path: "{{ stack_templates }}/environments/storage-environment.yaml"
-      register: custom_storage
     - name: Update Cinder ISCSI backend
       replace:
-        path: "{{ custom_storage.stat.path }}"
+        path: "{{ stack_templates }}/environments/storage-environment.yaml"
         regexp: "CinderEnableIscsiBackend:.*$"
         replace: "CinderEnableIscsiBackend: {{ item.iscsi }}"
-      when: custom_storage.stat.exists == True and item.storage == "cinder"
+      when: item.storage == "cinder"
       with_items: "{{ storage_config }}"
     - name: Update Cinder Ceph backend
       replace:
-        path: "{{ custom_storage.stat.path }}"
+        path: "{{ stack_templates }}/environments/storage-environment.yaml"
         regexp: "CinderEnableRbdBackend:.*$"
         replace: "CinderEnableRbdBackend: {{ item.ceph }}"
-      when: custom_storage.stat.exists == True and item.storage == "cinder"
+      when: item.storage == "cinder"
       with_items: "{{ storage_config }}"
     - name: Update Cinder Backup backend
       replace:
-        path: "{{ custom_storage.stat.path }}"
+        path: "{{ stack_templates }}/environments/storage-environment.yaml"
         regexp: "CinderBackupBackend:.*$"
         replace: "CinderBackupBackend: {{ item.backup }}"
-      when: custom_storage.stat.exists == True and item.storage == "cinder"
+      when: item.storage == "cinder"
       with_items: "{{ storage_config }}"
     - name: Update Nova ephemeral backend
       replace:
-        path: "{{ custom_storage.stat.path }}"
+        path: "{{ stack_templates }}/environments/storage-environment.yaml"
         regexp: "NovaEnableRbdBackend:.*$"
         replace: "NovaEnableRbdBackend: {{ item.use_ceph }}"
-      when: custom_storage.stat.exists == True and item.storage == "nova-ephemeral"
+      when: item.storage == "nova-ephemeral"
       with_items: "{{ storage_config }}"
     - name: Update Glance backend
       replace:
-        path: "{{ custom_storage.stat.path }}"
+        path: "{{ stack_templates }}/environments/storage-environment.yaml"
         regexp: "GlanceBackend:.*$"
         replace: "GlanceBackend: {{ item.backend }}"
-      when: custom_storage.stat.exists == True and item.storage == "glance"
+      when: item.storage == "glance"
       with_items: "{{ storage_config }}"
     - name: Update Gnocchi backend
       replace:
-        path: "{{ custom_storage.stat.path }}"
+        path: "{{ stack_templates }}/environments/storage-environment.yaml"
         regexp: "GnocchiBackend:.*$"
         replace: "GnocchiBackend: {{ item.backend }}"
-      when: custom_storage.stat.exists == True and item.storage == "gnocchi"
+      when: item.storage == "gnocchi"
       with_items: "{{ storage_config }}"
     - name: Create a default fact that we are not using Ceph
       set_fact:
@@ -365,16 +367,90 @@
         include_ceph: True
       with_items: "{{ storage_config }}"
       when: item.storage == "gnocchi" and item.backend == "rbd"
+    - debug:
+        var: include_ceph
+      when: include_ceph
     - name: Remove references to Ceph components from storage-environment.yaml if not using Ceph
       shell: |
-        sed -i '/{{ item }}/d' {{ custom_storage.stat.path }}
+        sed -i '/{{ item }}/d' {{ stack_templates }}/environments/storage-environment.yaml
       with_items: 
         - ceph-mgr.yaml
         - ceph-mon.yaml
         - ceph-osd.yaml
         - ceph-client.yaml
         - resource_registry
-      when: custom_storage.stat.exists == True and include_ceph == False
+      when: not include_ceph
+    - name: Add wipe-disk to storage-environment.yaml
+      lineinfile:
+        path: "{{ stack_templates }}/environments/storage-environment.yaml"
+        state: present
+        line: "  OS::TripleO::NodeUserData: {{ stack_templates }}/wipe-disks.yaml"
+        regexp: ".* OS::TripleO::NodeUserData: {{ stack_templates }}/wipe-disks.yaml.*"
+        insertafter: '.*resource_registry.*'
+      when: include_ceph
+    - name: Create wipe-disk.sh for Ceph
+      copy:
+        content: |
+          #!/bin/bash
+          if [[ `hostname` = *"ceph"* ]]
+          then
+            echo "Number of disks detected: $(lsblk -no NAME,TYPE,MOUNTPOINT | grep "disk" | awk '{print $1}' | wc -l)"
+            for DEVICE in `lsblk -no NAME,TYPE,MOUNTPOINT | grep "disk" | awk '{print $1}'`
+            do
+              ROOTFOUND=0
+              echo "Checking /dev/$DEVICE..."
+              echo "Number of partitions on /dev/$DEVICE: $(expr $(lsblk -n /dev/$DEVICE | awk '{print $7}' | wc -l) - 1)"
+              for MOUNTS in `lsblk -n /dev/$DEVICE | awk '{print $7}'`
+              do
+                if [ "$MOUNTS" = "/" ]
+                then
+                  ROOTFOUND=1
+                fi
+              done
+              if [ $ROOTFOUND = 0 ]
+              then
+                echo "Root not found in /dev/${DEVICE}"
+                echo "Wiping disk /dev/${DEVICE}"
+                sgdisk -Z /dev/${DEVICE}
+                sgdisk -g /dev/${DEVICE}
+              else
+                echo "Root found in /dev/${DEVICE}"
+              fi
+            done
+          fi
+        dest: "{{ stack_templates }}/wipe-disk.sh"
+        force: true
+        owner: "{{ uc_user }}"
+        group: "{{ uc_user }}"
+      when: include_ceph
+    - name: Create wipe-disks.yaml for Ceph
+      copy:
+        content: |
+          heat_template_version: 2014-10-16
+          
+          description: >
+            Wipe and convert all disks to GPT (except the disk containing the root file system)
+          
+          resources:
+            userdata:
+              type: OS::Heat::MultipartMime
+              properties:
+                parts:
+                - config: {get_resource: wipe_disk}
+          
+            wipe_disk:
+              type: OS::Heat::SoftwareConfig
+              properties:
+                config: {get_file: wipe-disk.sh}
+          
+          outputs:
+            OS::stack_id:
+              value: {get_resource: userdata}
+        dest: "{{ stack_templates }}/wipe-disks.yaml"
+        force: true
+        owner: "{{ uc_user }}"
+        group: "{{ uc_user }}"
+      when: include_ceph
     - name: Check if we are using a custom network-isolation.yaml
       stat:
         path: "{{ stack_templates }}/environments/network-isolation.yaml"
@@ -659,7 +735,7 @@
         fi
         rm -rf ${WORK_DIRECTORY} 2>/dev/null
       register: introspection_status
-      when: baremetal_nodes.stat.exists and include_ceph == "True" and ceph_deployment == 'director'
+      when: ceph_configure_root_disk and baremetal_nodes.stat.exists and include_ceph and ceph_deployment == 'director'
     - name: Configure root_disk (if possible) (ceph)
       shell: | 
         #!/bin/bash
@@ -702,11 +778,11 @@
         }
         rm -rf ${WORK_DIRECTORY} 2>/dev/null
         exit ${ERROR_COUNT}
-      when: ceph_configure_root_disk and baremetal_nodes.stat.exists and introspection_status.stdout == 'true' and include_ceph == "True" and ceph_deployment == 'director'
+      when: ceph_configure_root_disk and baremetal_nodes.stat.exists and introspection_status.stdout == 'true' and include_ceph and ceph_deployment == 'director'
     - name: Create Ceph storage configuration (if needed) (version 13+)
       shell: | 
         #!/bin/bash
-        CEPH_CUSTOM_CONFIG=/home/{{ uc_user }}/templates/ceph-custom-config.yaml
+        CEPH_CUSTOM_CONFIG={{ stack_templates }}/ceph-custom-config.yaml
         echo "parameter_defaults:" >${CEPH_CUSTOM_CONFIG}
         echo "  CephConfigOverrides:" >>${CEPH_CUSTOM_CONFIG}
         echo "    mon_max_pg_per_osd: {{ ceph_mon_max_pg_per_osd }}" >>${CEPH_CUSTOM_CONFIG}
@@ -717,16 +793,19 @@
         echo "    osd_pool_default_pgp_num: {{ ceph_osd_pool_default_pgp_num }}" >>${CEPH_CUSTOM_CONFIG}
         echo "  CephAnsibleDisksConfig:" >>${CEPH_CUSTOM_CONFIG}
         echo "    dmcrypt: {{ ceph_encrypt_osd }}" >>${CEPH_CUSTOM_CONFIG}
-      when: include_ceph == "True" and ceph_deployment == 'director' and osp_version >= 13
+      when: include_ceph and ceph_deployment == 'director' and osp_version >= 13
     - name: Add OSD's to the configuration file (version 13+)
       shell: |
         #!/bin/bash
-        CEPH_CUSTOM_CONFIG=/home/{{ uc_user }}/templates/ceph-custom-config.yaml
+        CEPH_CUSTOM_CONFIG={{ stack_templates }}/ceph-custom-config.yaml
         OSD={{ item.osd }}
         JOURNAL={{ item.journal }}
         if [[ ! -z "{{ item.journal }}" && -z "$(grep "    osd_scenario: non-collocated" ${CEPH_CUSTOM_CONFIG})" ]]
         then
           echo "    osd_scenario: non-collocated" >>${CEPH_CUSTOM_CONFIG}
+        elif [[ -z "{{ item.journal }}" && -z "$(grep "    osd_scenario: collocated" ${CEPH_CUSTOM_CONFIG})" ]]
+        then
+          echo "    osd_scenario: collocated" >>${CEPH_CUSTOM_CONFIG}
         fi
         if [[ -z "$(grep "    devices:" ${CEPH_CUSTOM_CONFIG})" ]]
         then
@@ -734,11 +813,11 @@
         fi
         echo "      - ${OSD}" >>${CEPH_CUSTOM_CONFIG}
       with_items: "{{ ceph_disks }}"
-      when: include_ceph == "True" and ceph_deployment == 'director' and osp_version >= 13
+      when: include_ceph and ceph_deployment == 'director' and osp_version >= 13
     - name: Add Journal's to the configuration file (if needed) (version 13+)
       shell: |
         #!/bin/bash
-        CEPH_CUSTOM_CONFIG=/home/{{ uc_user }}/templates/ceph-custom-config.yaml
+        CEPH_CUSTOM_CONFIG={{ stack_templates }}/ceph-custom-config.yaml
         JOURNAL={{ item.journal }}
         if [[ -z "$(grep "    dedicated_devices:" ${CEPH_CUSTOM_CONFIG})" ]]
         then
@@ -746,15 +825,15 @@
         fi
         echo "      - ${JOURNAL}" >>${CEPH_CUSTOM_CONFIG}
       with_items: "{{ ceph_disks }}"
-      when: include_ceph == "True" and ceph_deployment == 'director' and osp_version >= 13 and item.journal != ''
+      when: include_ceph and ceph_deployment == 'director' and osp_version >= 13 and item.journal != ''
     - name: Add ceph configuration to the overcloud-deploy.sh (version 13+)
       lineinfile:
         path: "{{ deploy_script }}"
         state: present
-        line: "  -e /home/{{ uc_user }}/templates/ceph-custom-config.yaml \\"
-        regexp: ".*-e /home/{{ uc_user }}/templates/ceph-custom-config.yaml \\.*"
+        line: "  -e {{ stack_templates }}/ceph-custom-config.yaml \\"
+        regexp: ".*-e {{ stack_templates }}/ceph-custom-config.yaml \\.*"
         insertafter: '.*storage-environment.yaml.*'
-      when: include_ceph == "True" and ceph_deployment == 'director' and osp_version >= 13
+      when: include_ceph and ceph_deployment == 'director' and osp_version >= 13
     - name: Delete /home/{{ uc_user }}/configure_containers.sh if it exists
       file:
         path: /home/{{ uc_user }}/configure_containers.sh
@@ -782,6 +861,7 @@
       blockinfile:
         path: /home/{{ uc_user }}/configure_containers.sh
         block: |2
+            --tag-from-label {version}-{release} \
             --output-env-file=/home/{{ uc_user }}/templates/overcloud_images.yaml \
             --output-images-file /home/{{ uc_user }}/registry_images.yaml
         marker: "  # {mark} ANSIBLE BLOCK IMAGES"
@@ -793,10 +873,9 @@
             -e /usr/share/openstack-tripleo-heat-templates/environments/ceph-ansible/ceph-ansible.yaml \
             --set ceph_namespace=registry.access.redhat.com/rhceph \
             --set ceph_image=rhceph-3-rhel7 \
-            --tag-from-label {version}-{release} \
         marker: "  # {mark} ANSIBLE BLOCK CEPH"
         insertbefore: overcloud_images.yaml
-      when: include_ceph == "True" and ceph_deployment == 'director' and osp_version >= 12
+      when: include_ceph and ceph_deployment == 'director' and osp_version >= 12
     - name: Obtain push-destination IP if using a local registry
       shell: |
         ip a s br-ctlplane | grep inet | head -1 | awk '{print $2}' | awk -F/ '{print $1}'

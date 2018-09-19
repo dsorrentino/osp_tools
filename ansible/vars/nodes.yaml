@@ -1,6 +1,6 @@
   - nic_configs: multiple-nics
   - nodes:
-    - { count_parameter: "ControllerCount", flavor_parameter: "OvercloudControlFlavor", flavor: "control", count: 3, custom_role: "False" }
+    - { count_parameter: "ControllerCount", flavor_parameter: "OvercloudControllerFlavor", flavor: "control", count: 3, custom_role: "False" }
     - { count_parameter: "ComputeCount", flavor_parameter: "OvercloudComputeFlavor", flavor: "compute", count: 2, custom_role: "False" }
     - { count_parameter: "CephStorageCount", flavor_parameter: "OvercloudCephStorageFlavor", flavor: "ceph-storage", count: 3, custom_role: "False" }
     - { count_parameter: "ComputeOsdCount", flavor_parameter: "OvercloudComputeOsdFlavor", flavor: "computeosd", count: 0, custom_role: "True", role_combine: "Compute,CephStorage" }

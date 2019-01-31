@@ -207,6 +207,8 @@
             cp -p ${FILE} {{ stack_templates }}/${DIRECTORY}
           done
         done
+        mkdir -p {{ stack_templates }}/network/config 2>/dev/null
+        cp -pR ${WORK_DIRECTORY}/network/config/* {{ stack_templates }}/network/config
         cd ~
         rm -rf ${WORK_DIRECTORY}
     - name: Create the services sub-directory under environments if needed.
@@ -845,7 +847,8 @@
         owner: "{{ uc_user }}"
         group: "{{ uc_user }}"
         mode: 0755
-    - name: Create script to perform necessary container generation (version 12+)
+      when: osp_version >= 12 and osp_version <= 13
+    - name: Create script to perform necessary container generation (version 12-13)
       blockinfile:
         path: /home/{{ uc_user }}/configure_containers.sh
         block: |
@@ -853,11 +856,12 @@
           source /home/{{ uc_user }}/stackrc
           openstack overcloud container image prepare \
         marker: "  # {mark} ANSIBLE BLOCK SCRIPT"
-    - name: Create script to perform necessary container generation (version 12+)
+      when: osp_version >= 12 and osp_version <= 13
+    - name: Create script to perform necessary container generation (version 12-13)
       shell: |
         egrep ' -e ' {{ deploy_script }} >>/home/{{ uc_user }}/configure_containers.sh
-      when: osp_version >= 12
-    - name: Create script to perform necessary container generation (version 12+)
+      when: osp_version >= 12 and osp_version <= 13
+    - name: Create script to perform necessary container generation (version 12-13)
       blockinfile:
         path: /home/{{ uc_user }}/configure_containers.sh
         block: |2
@@ -865,8 +869,8 @@
             --output-env-file=/home/{{ uc_user }}/templates/overcloud_images.yaml \
             --output-images-file /home/{{ uc_user }}/registry_images.yaml
         marker: "  # {mark} ANSIBLE BLOCK IMAGES"
-      when: osp_version >= 12
-    - name: Add ceph container image lines if needed (version 12+)
+      when: osp_version >= 12 and osp_version <= 13
+    - name: Add ceph container image lines if needed (version 12-13)
       blockinfile:
         path: /home/{{ uc_user }}/configure_containers.sh
         block: |2
@@ -875,13 +879,13 @@
             --set ceph_image=rhceph-3-rhel7 \
         marker: "  # {mark} ANSIBLE BLOCK CEPH"
         insertbefore: overcloud_images.yaml
-      when: include_ceph and ceph_deployment == 'director' and osp_version >= 12
-    - name: Obtain push-destination IP if using a local registry
+      when: include_ceph and ceph_deployment == 'director' and osp_version >= 12 and osp_version <= 13
+    - name: Obtain push-destination IP if using a local registry (version 12-13)
       shell: |
         ip a s br-ctlplane | grep inet | head -1 | awk '{print $2}' | awk -F/ '{print $1}'
       register: registry_ip
-      when: osp_version >= 12 and container_registry == 'local'
-    - name: Add local namespace information (version 12+)
+      when: osp_version >= 12 and osp_version <= 13 and container_registry == 'local'
+    - name: Add local namespace information (version 12-13)
       blockinfile:
         path: /home/{{ uc_user }}/configure_containers.sh
         block: |2
@@ -890,23 +894,24 @@
             --prefix={{ container_prefix }}- \
         marker: "  # {mark} ANSIBLE BLOCK LOCAL"
         insertafter: openstack overcloud container image prepare
-      when: osp_version >= 12 and container_registry == 'local'
+      when: osp_version >= 12 and osp_version <= 13 and container_registry == 'local'
     - name: Strip out Ansible comments from the script
       shell: |
         sed -i '/ANSIBLE/d' {{ item }}
       with_items:
         - /home/{{ uc_user }}/configure_containers.sh
-    - name: Generate the overcloud image files (version 12+)
+      when: osp_version >= 12 and osp_version <= 13
+    - name: Generate the overcloud image files (version 12-13)
       shell: |
         /home/{{ uc_user }}/configure_containers.sh
-      when: osp_version >= 12
-    - name: Upload images to local registry (version 12+)
+      when: osp_version >= 12 and osp_version <=13
+    - name: Upload images to local registry (version 12-13)
       shell: |
         openstack overcloud container image upload \
           --config-file /home/{{ uc_user }}/registry_images.yaml \
           --verbose
       become: true
-      when: osp_version >= 12 and container_registry == 'local'
+      when: osp_version >= 12 and osp_version <= 13 and container_registry == 'local'
     - name: Check if we have a container repository YAML
       stat:
         path: "{{ stack_templates }}/overcloud_images.yaml"
@@ -943,7 +948,7 @@
         then
           mkdir -p {{ stack_templates }}/environments/ssl
           cat {{ tripleo_heat_templates }}/environments/ssl/inject-trust-anchor-hiera.yaml | sed -n '/The content of the CA cert goes here/q;p' >{{ stack_templates }}/environments/ssl/inject-trust-anchor-hiera.yaml
-          sudo cat ${SSL_CERT} | sed -n 's/^/        /g;p' >>{{ stack_templates }}/environments/ssl/inject-trust-anchor-hiera.yaml
+          sudo cat ${SSL_CERT} | sed -n '/BEGIN CERTIFICATE/,$p' | sed -n 's/^/        /g;p' >>{{ stack_templates }}/environments/ssl/inject-trust-anchor-hiera.yaml
           sed -i 's/first-ca-name/undercloud/g' {{ stack_templates }}/environments/ssl/inject-trust-anchor-hiera.yaml
         fi
         echo "${SSL_ENABLED}"
@@ -956,8 +961,9 @@
       when: undercloud_ssl.stdout == 'true'
     - name: Get list of all NIC config YAML files
       find:
-        paths: "{{ stack_templates }}/network/config/{{ nic_configs }}"
+        paths: "{{ stack_templates }}/network/config"
         patterns: '*.yaml'
+        recurse: yes
       register: nic_config_directory
     - name: Update relative paths in NIC config
       replace:

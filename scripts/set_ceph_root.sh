@@ -38,7 +38,15 @@ for ((NDX=1; NDX<$#; NDX++))
       echo "ERROR: Unable to find root disk in ${DATA_FILE}"
     else
       WWN=$(egrep -A10 ${ROOT_DISK} ${DATA_FILE} | grep '"wwn":' | head -1 | awk '{print $NF}' | sed 's/,//g;s/"//g')
+      if [[ -z "${WWN}" ]]
+      then
+        WWN=$(egrep -B10 ${ROOT_DISK} ${DATA_FILE} | grep '"wwn":' | tail -1 | awk '{print $NF}' | sed 's/,//g;s/"//g')
+      fi
       SERIAL=$(egrep -A10 ${ROOT_DISK} ${DATA_FILE} | grep '"serial":' | head -1 | awk '{print $NF}' | sed 's/,//g;s/"//g')
+      if [[ -z "${SERIAL}" ]]
+      then
+        SERIAL=$(egrep -B10 ${ROOT_DISK} ${DATA_FILE} | grep '"serial":' | tail -1 | awk '{print $NF}' | sed 's/,//g;s/"//g')
+      fi
       echo "Configuring ${ROOT_DISK} as root disk device for node '${NODE_NAME}' using serial '${SERIAL}'"
       openstack baremetal node set --property root_device="{'serial': '${SERIAL}'}" ${NODE_NAME}
     fi

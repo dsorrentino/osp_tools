@@ -3,12 +3,12 @@
   - director_provisioning_network: 172.16.0.11/24
   - director_provisioning_gateway: 172.16.0.11
   - director_provisioning_dhcp_start: 172.16.0.100
-  - director_provisioning_dhcp_end: 172.16.0.200
-  - director_provisioning_introspection_start: 172.16.0.50
-  - director_provisioning_introspection_end: 172.16.0.99
+  - director_provisioning_dhcp_end: 172.16.0.149
+  - director_provisioning_introspection_start: 172.16.0.200
+  - director_provisioning_introspection_end: 172.16.0.249
   - director_provisioning_mtu: 8946
   - director_local_ip: 172.16.0.11
-  - director_public_vip: 10.9.65.125
+  - director_public_vip: 10.9.65.105
   - director_admin_vip: 172.16.0.12
 # Overcloud configuration
   - networks:
@@ -16,7 +16,7 @@
     - { network: "Storage", cidr: "172.16.3.0/24", vlan: "30", pool: "[{'start': '172.16.3.20', 'end': '172.16.3.200'}]", static_vip: "True", vip: 172.16.3.10, default_route: '' }
     - { network: "StorageMgmt", cidr: "172.16.4.0/24", vlan: "40", pool: "[{'start': '172.16.4.20', 'end': '172.16.4.200'}]", static_vip: "True", vip: 172.16.4.10, default_route: '' }
     - { network: "Tenant", cidr: "172.16.2.0/24", vlan: "50", pool: "[{'start': '172.16.2.20', 'end': '172.16.2.200'}]", static_vip: "False", vip: '', default_route: '' }
-    - { network: "External", cidr: "10.9.65.128/26", vlan: "10", pool: "[{'start': '10.9.65.175', 'end': '10.9.65.179'}]", static_vip: "True", vip: 10.9.65.171, default_route: 10.9.65.129 }
-  - dns_servers: '["10.9.71.7","8.8.4.4"]'
+    - { network: "External", cidr: "10.9.65.192/26", vlan: "10", pool: "[{'start': '10.9.65.221', 'end': '10.9.65.226'}]", static_vip: "True", vip: 10.9.65.220, default_route: 10.9.65.193 }
+  - dns_servers: '["8.8.4.4","8.8.8.8"]'
   - ntp_server: clock.corp.redhat.com
-  - ssl_config: { enable_tls: "False", cloud_name: "ds-osp13-oc.hextupleo.lab", cloud_domain: "hextupleo.lab" }
+  - ssl_config: { enable_tls: "False", cloud_name: "osp-overcloud.hextupleo.lab", cloud_domain: "hextupleo.lab" }

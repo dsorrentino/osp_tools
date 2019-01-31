@@ -1,5 +1,5 @@
 # These are variables that are utilized by pretty much all playbooks.
-  - osp_version: 13
+  - osp_version: 14
   - uc_user: stack
   - uc_pass: stack
   - tripleo_heat_templates: /usr/share/openstack-tripleo-heat-templates

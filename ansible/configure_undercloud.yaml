@@ -43,6 +43,12 @@
              subscription-manager repos --disable=*
              subscription-manager repos --enable=rhel-{{ rhel_version }}-server-rpms --enable=rhel-{{ rhel_version }}-server-extras-rpms --enable=rhel-{{ rhel_version }}-server-rh-common-rpms --enable=rhel-ha-for-rhel-{{ rhel_version }}-server-rpms --enable=rhel-{{ rhel_version }}-server-openstack-{{ osp_version }}-rpms
       become: yes
+      when: true == false
+    - name: Update all packages since the openstack repos may have updates
+      yum:
+        name: '*'
+        state: latest
+      become: yes
     - name: Install Triple-O Packages as well as director images
       yum:
         name: "{{ item }}"
@@ -51,6 +57,7 @@
         - python-tripleoclient
         - rhosp-director-images
         - rhosp-director-images-ipa
+        - crudini
       become: yes
     - name: Create images and templates directory for user {{ uc_user }}
       file:
@@ -78,6 +85,7 @@
         - vars/services.yaml
         - vars/storage.yaml
         - vars/undercloud_services.yaml
+        - vars/nodes.yaml
         - create_templates.yaml
         - post_deploy_undercloud.yaml
     - name: Create ansible hosts file
@@ -357,6 +365,22 @@
       become: yes
       become_user: "{{ uc_user }}"
       when: osp_version < 11
+    - name: Configure undercloud.conf - overcloud_domain_name
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#overcloud_domain_name = "
+        line: "overcloud_domain_name = {{ ssl_config.cloud_domain }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - undercloud_ntp_servers
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#undercloud_ntp_servers = "
+        line: "undercloud_ntp_servers = {{ ntp_server }}"
+      become: yes
+      become_user: "{{ uc_user }}"
     - name: Extract overcloud images for later.
       shell: |
              cd ~/images

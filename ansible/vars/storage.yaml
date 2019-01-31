@@ -7,7 +7,7 @@
   - ceph_deployment: director # director, external or none
   - ceph_node_capability: node:ceph
   - ceph_configure_root_disk: false
-  - ceph_root_disk: /dev/sda
+  - ceph_root_disk: /dev/vda
   - ceph_encrypt_osd: false
   - ceph_mon_max_pg_per_osd: 3072
   - ceph_journal_size: 5120
@@ -16,5 +16,4 @@
   - ceph_osd_pool_default_pg_num: 128
   - ceph_osd_pool_default_pgp_num: 128
   - ceph_disks:
-    - { osd: '/dev/sdb', journal: '' } # Null journal indicates co-located
-    - { osd: '/dev/sdc', journal: '' } # Null journal indicates co-located, otherwise specify a device
+    - { osd: '/dev/vdb', journal: '' } # Null journal indicates co-located

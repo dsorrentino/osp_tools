@@ -1,0 +1,144 @@
+- name: Configure container registry settings for OSP12 deployment
+  hosts: undercloud
+  vars_files:
+    - vars/globals.yaml
+    - vars/networking.yaml
+    - vars/services.yaml
+    - vars/storage.yaml
+  vars:
+    - registry_type: local # Can be local, remote or satellite
+    - ceph_image: rhceph-3-rhel7
+  tasks:
+    - name: Create a containers subdirectory for intermediate work files
+      file:
+        state: directory
+        path: /home/{{ uc_user }}/container_data
+        owner: "{{ uc_user }}"
+        group: "{{ uc_user }}"
+        mode: u+rwx,g+rx,o+rx
+    - name: Create a default fact that we are not using Ceph
+      set_fact:
+        include_ceph: False
+      when: osp_version >= 12 and osp_version <= 13
+    - name: Update ceph fact if Cinder is uing Ceph
+      set_fact:
+        include_ceph: True
+      with_items: "{{ storage_config }}"
+      when: osp_version >= 12 and osp_version <= 13 and item.storage == "cinder" and item.ceph
+    - name: Update ceph fact if Cinder Backup is uing Ceph
+      set_fact:
+        include_ceph: True
+      with_items: "{{ storage_config }}"
+      when: osp_version >= 12 and osp_version <= 13 and item.storage == "cinder" and item.backup == "ceph"
+    - name: Update ceph fact if Nova-ephemeral is uing Ceph
+      set_fact:
+        include_ceph: True
+      with_items: "{{ storage_config }}"
+      when: osp_version >= 12 and osp_version <= 13 and item.storage == "nova-ephemeral" and item.use_ceph
+    - name: Update ceph fact if Glance is uing Ceph
+      set_fact:
+        include_ceph: True
+      with_items: "{{ storage_config }}"
+      when: osp_version >= 12 and osp_version <= 13 and item.storage == "glance" and item.backend == "rbd"
+    - name: Update ceph fact if Gnocchi is uing Ceph
+      set_fact:
+        include_ceph: True
+      with_items: "{{ storage_config }}"
+      when: osp_version >= 12 and osp_version <= 13 and item.storage == "gnocchi" and item.backend == "rbd"
+    - name: Get local registry IP address (Registry Type> {{ registry_type }})
+      shell: "sudo netstat -anp | grep registry | grep LISTEN | awk '{print $4}' | awk -F: '{print $1}'"
+      register: local_registry_ip
+      when: osp_version >= 12 and osp_version <= 13 and registry_type == "local"
+    - name: Get local registry Port (Registry Type> {{ registry_type }})
+      shell: "sudo netstat -anp | grep registry | grep LISTEN | awk '{print $4}' | awk -F: '{print $2}'"
+      register: local_registry_port
+      when: osp_version >= 12 and osp_version <= 13 and registry_type == "local"
+    - name: Create script to generate package list (Registry Type> {{ registry_type }})
+      copy:
+        content: |
+          source /home/{{ uc_user }}/stackrc
+          openstack overcloud container image prepare \
+            --namespace=registry.access.redhat.com/rhosp{{ osp_version }} \
+            --prefix=openstack- \
+            --output-images-file /home/{{ uc_user }}/container_data/local_registry_images.yaml
+        dest: /home/{{ uc_user }}/container_data/generate_package_list.sh
+        force: True
+        owner: "{{ uc_user }}"
+        group: "{{ uc_user }}"
+        mode: u+rwx,g+rx,o+rx
+      when: osp_version >= 12 and osp_version <= 13 and registry_type == "local"
+    - name: Add push_destination (Registry Type> {{ registry_type }})
+      lineinfile:
+        path: /home/{{ uc_user }}/container_data/generate_package_list.sh
+        insertbefore: output-images-file 
+        line: '  --push-destination={{ local_registry_ip.stdout }}:{{ local_registry_port.stdout }} \'
+      when: osp_version >= 12 and osp_version <= 13 and registry_type == "local"
+    - name: Add tag-from-label (Registry Type> {{ registry_type }})
+      lineinfile:
+        path: /home/{{ uc_user }}/container_data/generate_package_list.sh
+        insertbefore: output-images-file 
+        line: '  --tag-from-label {version}-{release} \'
+      when: osp_version >= 12 and osp_version <= 13 and registry_type != "satellite"
+    - name: Add Ironic environment files if needed (Registry Type> {{ registry_type }})
+      lineinfile:
+        path: /home/{{ uc_user }}/container_data/generate_package_list.sh
+        insertbefore: output-images-file 
+        line: '  -e {{ stack_templates }}/environments/services/ironic.yaml \'
+      when: osp_version >= 12 and osp_version <= 13 and deploy_ironic
+    - name: Add Ceph environment files if needed (Registry Type> {{ registry_type }})
+      lineinfile:
+        path: /home/{{ uc_user }}/container_data/generate_package_list.sh
+        insertbefore: output-images-file 
+        line: '  -e {{ tripleo_heat_templates }}/environments/ceph-ansible/ceph-ansible.yaml \'
+      when: osp_version >= 12 and osp_version <= 13 and include_ceph 
+    - name: Add Ceph namespace information (Registry Type> {{ registry_type }})
+      lineinfile:
+        path: /home/{{ uc_user }}/container_data/generate_package_list.sh
+        insertbefore: output-images-file 
+        line: '  --set ceph_namespace=registry.access.redhat.com/rhceph \'
+      when: osp_version >= 12 and osp_version <= 13 and include_ceph 
+    - name: Add Ceph image information (Registry Type> {{ registry_type }})
+      lineinfile:
+        path: /home/{{ uc_user }}/container_data/generate_package_list.sh
+        insertbefore: output-images-file 
+        line: '  --set ceph_image={{ ceph_image }} \'
+      when: osp_version >= 12 and osp_version <= 13 and include_ceph
+    - name: Add overcloud_images.yaml (Registry Type> {{ registry_type }})
+      lineinfile:
+        path: /home/{{ uc_user }}/container_data/generate_package_list.sh
+        insertbefore: output-images-file 
+        line: '  --output-env-file=/home/{{ uc_user }}/container_data/overcloud_images.yaml \'
+      when: osp_version >= 12 and osp_version <= 13 and registry_type == "local"
+    - name: Generate a list of packages (Registry Type> {{ registry_type }})
+      shell: |
+        exec /home/{{ uc_user }}/container_data/generate_package_list.sh
+      when: osp_version >= 12 and osp_version <= 13 and registry_type != "satellite"
+    - name: Uploading images locally (Registry Type> {{ registry_type }})
+      shell: |
+        source /home/{{ uc_user }}/stackrc
+        sudo openstack overcloud container image upload --config-file  /home/{{ uc_user }}/container_data/local_registry_images.yaml --verbose
+      when: osp_version >= 12 and osp_version <= 13 and registry_type == "local"
+    - name: Show packages (Registry Type> {{ registry_type }})
+      shell: |
+        curl http://{{ local_registry_ip.stdout }}:{{ local_registry_port.stdout }}/v2/_catalog | jq .repositories[]
+      when: osp_version >= 12 and osp_version <= 13 and registry_type == "local"
+    - name: Generate default container image preparation file (OSP Version 14+)
+      shell: |
+        openstack tripleo container image prepare default \
+          --local-push-destination \
+          --output-env-file /home/{{ uc_user }}/container_data/containers-prepare-parameter.yaml
+      when: osp_version >= 14 and registry_type == "local"
+    - name: Install crudini package if needed
+      yum:
+        name: crudini
+        state: present
+      become: yes
+    - name: Generate default container image preparation file (OSP Version 14+)
+      shell: |
+        openstack tripleo container image prepare default \
+          --output-env-file /home/{{ uc_user }}/container_data/containers-prepare-parameter.yaml
+      when: osp_version >= 14 and registry_type == "remote"
+    - name: Add container image preparation file to undercloud.conf (OSP Version 14+)
+      shell: |
+        crudini --set /home/{{ uc_user }}/undercloud.conf DEFAULT container_images_file /home/{{ uc_user }}/container_data/containers-prepare-parameter.yaml
+      when: osp_version >= 14

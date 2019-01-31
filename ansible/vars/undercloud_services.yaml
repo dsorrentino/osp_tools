@@ -11,4 +11,4 @@
   - store_ceilometer_events: true
   - container_registry: local # May be local, remote or satellite
   - container_prefix: openstack
-  - container_namespace: registry.access.redhat.com/rhosp13
+  - container_namespace: registry.access.redhat.com/rhosp14

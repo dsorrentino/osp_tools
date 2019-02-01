@@ -381,6 +381,56 @@
         line: "undercloud_ntp_servers = {{ ntp_server }}"
       become: yes
       become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - Set default admin password
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#undercloud_admin_password = "
+        line: "undercloud_admin_password = {{ uc_pass }}"
+      become: yes
+      become_user: "{{ uc_user }}"
+    - name: Configure undercloud.conf - local_subnet (version 14+)
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#local_subnet = "
+        line: "local_subnet = ctlplane-subnet"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: osp_version >= 14
+    - name: Configure undercloud.conf - subnets (version 14+)
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#subnets = "
+        line: "subnets = ctlplane-subnet"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: osp_version >= 14
+    - name: Created undercloud hiera if needed (version 14+)
+      copy:
+        content: |
+          neutron::global_physnet_mtu: {{ director_provisioning_mtu }}
+        owner: "{{ uc_user }}"
+        group: "{{ uc_user }}"
+        mode: 0644
+        dest: /home/{{ uc_user }}/templates/undercloud_hiera.yaml
+      when: osp_version >= 14 and director_provisioning_mtu > 1500
+    - name: Configure undercloud.conf - undercloud_hiera (version 14+)
+      lineinfile:
+        path: ~/undercloud.conf
+        state: present
+        regexp: "^#hieradata_override = "
+        line: "hieradata_override = /home/{{ uc_user }}/templates/undercloud_hiera.yaml"
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: osp_version >= 14 and director_provisioning_mtu  > 1500
+    - name: Configure undercloud.conf - container_images_file (version 14+)
+      shell: |
+        crudini --set ~/undercloud.conf DEFAULT container_images_file /home/stack/templates/containers-prepare-parameter.yaml
+      become: yes
+      become_user: "{{ uc_user }}"
+      when: osp_version >= 14
     - name: Extract overcloud images for later.
       shell: |
              cd ~/images

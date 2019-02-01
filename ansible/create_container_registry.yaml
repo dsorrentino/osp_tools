@@ -1,4 +1,4 @@
-- name: Configure container registry settings for OSP12 deployment
+- name: Configure container registry settings for OSP {{ osp_version }} deployment
   hosts: undercloud
   vars_files:
     - vars/globals.yaml
